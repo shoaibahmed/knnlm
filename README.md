@@ -21,11 +21,14 @@ __Edit__: An early release of the code has been made available [here](https://gi
 ## Wikitext-103 Experiments
 
 Before starting, make sure you install Fairseq (after pulling the code, from the project directory) and [FAISS](https://github.com/facebookresearch/faiss/wiki):
+
 ```bash
 pip install --editable .
 
 pip install faiss
 ```
+
+Tested with `nvcr.io_nvidia_pytorch_21.04-py3`.
 
 ### A Note about Hardware
 
@@ -50,12 +53,29 @@ python preprocess.py \
     --validpref $TEXT/wiki.valid.tokens \
     --testpref $TEXT/wiki.test.tokens \
     --destdir data-bin/wikitext-103 \
-    --workers 20
+    --workers 8
+```
+
+For Wikitext-2:
+
+```bash
+cd examples/language_model/
+bash prepare-wikitext-2.sh
+cd ../..
+
+TEXT=examples/language_model/wikitext-2
+python preprocess.py \
+    --only-source \
+    --trainpref $TEXT/wiki.train.tokens \
+    --validpref $TEXT/wiki.valid.tokens \
+    --testpref $TEXT/wiki.test.tokens \
+    --destdir data-bin/wikitext-2 \
+    --workers 8
 ```
 
 ### Training the Language Model
 
-We share Fairseq's instructions on how to train the language model here. Alternatively, you can download the checkpoint used for our experiments [here](https://nlp.stanford.edu/projects/knnlm/wt103_checkpoint_best.pt). 
+We share Fairseq's instructions on how to train the language model here. Alternatively, you can download the checkpoint used for our experiments [here](https://nlp.stanford.edu/projects/knnlm/wt103_checkpoint_best.pt).
 
 ```bash
 python train.py --task language_modeling \
@@ -70,12 +90,35 @@ python train.py --task language_modeling \
 
 This model was trained on 8 gpus.
 
+For wikitext-2:
+
+```bash
+python train.py --task language_modeling \
+    data-bin/wikitext-2 \
+    --save-dir checkpoints_wikitext2/ \
+    --arch transformer_lm_wiki103 \
+    --max-update 2860 --max-lr 1.0 --t-mult 2 --lr-period-updates 2700 --lr-scheduler cosine --lr-shrink 0.75 \
+    --warmup-updates 160 --warmup-init-lr 1e-07 --min-lr 1e-09 --optimizer nag --lr 0.0001 --clip-norm 0.1 \
+    --criterion adaptive_loss --max-tokens 3072 --update-freq 3 --tokens-per-sample 3072 --seed 1 --fp16 \
+    --sample-break-mode none --skip-invalid-size-inputs-valid-test --ddp-backend=no_c10d
+```
+
 ### Evaluating the Language Model
 
 To evaluate the model on the validation set:
 
 ```bash
 python eval_lm.py data-bin/wikitext-103 \
+    --path checkpoints/checkpoint_best.pt \
+    --sample-break-mode complete --max-tokens 3072 \
+    --context-window 2560 --softmax-batch 1024 \
+    --gen-subset valid
+```
+
+For wikitext-2:
+
+```bash
+python eval_lm.py data-bin/wikitext-2 \
     --path checkpoints/checkpoint_best.pt \
     --sample-break-mode complete --max-tokens 3072 \
     --context-window 2560 --softmax-batch 1024 \
@@ -102,6 +145,20 @@ python eval_lm.py data-bin/wikitext-103 \
 The total number of tokens in the Wikitext-103 training set is `103227021`. The dstore size `103225485` is `1536` tokens less than the total due to the context-window. We want each key to be constructed using a minimum amount of prior context.
 
 If you would prefer to save the keys and values in float16, please use the `--dstore-fp16` flag and remember to use it during the index building and evaluation steps as well.
+
+
+For Wikitext-2, the total number of tokens in the training set is `2088628`. The dstore size `2087092` is `1536` tokens less than the total due to the context-window. We want each key to be constructed using a minimum amount of prior context.
+
+```bash
+python eval_lm.py data-bin/wikitext-2 \
+    --path checkpoints/checkpoint_best.pt \
+    --sample-break-mode none --max-tokens 3072 \
+    --softmax-batch 1024 --gen-subset train \
+    --context-window 1536 --tokens-per-sample 1536 \
+    --dstore-mmap checkpoints/dstore --knn-keytype 'last_ffn_input' \
+    --dstore-size 2087092 --model-overrides "{'knn_keytype': 'last_ffn_input'}" \
+    --save-knnlm-dstore --fp16
+```
 
 ### Building the FAISS index
 
