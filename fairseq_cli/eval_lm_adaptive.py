@@ -20,7 +20,7 @@ from fairseq.data import LMContextWindowDataset
 from fairseq.meters import StopwatchMeter, TimeMeter
 from fairseq.sequence_scorer import SequenceScorer
 from fairseq.knnlm import KNN_Dstore
-from .eval_lm_adaptive import main_adaptive
+from .eval_lm import WordStat
 
 
 logging.basicConfig(
@@ -28,36 +28,59 @@ logging.basicConfig(
     datefmt='%Y-%m-%d %H:%M:%S',
     level=logging.INFO,
 )
-logger = logging.getLogger('fairseq_cli.eval_lm')
+logger = logging.getLogger('fairseq_cli.eval_lm_adaptive')
 
 
-class WordStat(object):
-    def __init__(self, word, is_bpe):
-        self.word = word
-        self.is_bpe = is_bpe
-        self.log_prob = 0
-        self.next_word_prob = 0
-        self.count = 0
-        self.missing_next_words = 0
+class InMemoryRetrievalStore:
+    def __init__(self, dist_metric) -> None:
+        self.k = None
+        self.v = None
+        assert dist_metric in ["euclidean", "cosine"]
+        self.dist_metric = dist_metric
+    
+    def add_item_to_store(self, k, v):
+        assert len(k.shape) == 1, k.shape
+        assert len(v.shape) == 1, v.shape
 
-    def add(self, log_prob, next_word_prob):
-        """ increments counters for the sum of log probs of current word and next
-            word (given context ending at current word). Since the next word might be at the end of the example,
-            or it might be not counted because it is not an ending subword unit,
-            also keeps track of how many of those we have seen """
-        if next_word_prob is not None:
-            self.next_word_prob += next_word_prob
+        if self.dist_metric == "cosine":
+            k = torch.nn.functional.normalize(k, p=2.0, dim=0)  # l2 normalize the key
+        if self.k is None:
+            assert self.v is None
+            self.k = k.expand_dim(0)  # 1 x d
+            self.v = v.expand_dim(0)  # 1 x d'
         else:
-            self.missing_next_words += 1
-        self.log_prob += log_prob
-        self.count += 1
+            self.k = torch.concatenate([self.k, k], dim=0)
+            self.v = torch.concatenate([self.v, v], dim=0)
+        print(f"!! New item added in memory store / k: {k.shape} / v: {v.shape}")
 
-    def __str__(self):
-        return '{}\t{}\t{}\t{}\t{}\t{}'.format(self.word, self.count, self.log_prob, self.is_bpe,
-                                               self.next_word_prob, self.count - self.missing_next_words)
+    def get_knn_vals(self, q, k):
+        assert isinstance(k, int), k
+        assert len(q.shape) == 1, q.shape
+        q = q.expand_dim(dim=0)
+
+        if self.k is None:
+            return []
+        elif self.k.shape < k:
+            return self.v  # Return all vals
+        else:
+            # self.k shape: B x D
+            if self.dist_metric == "euclidean":
+                dist = torch.sqrt((self.k - q) ** 2).sum(dim=1)
+            elif self.dist_metric == "cosine":
+                q = torch.nn.functional.normalize(q, p=2.0, dim=1)  # l2 normalize the query
+                sim = torch.matmul(q, self.k.T)  # (1 x D) x (N x D).T -> 1 x N
+                dist = 1.0 - sim  # cosine distance
+            else:
+                raise RuntimeError(f"Unknown distance metric: {self.dist_metric}")
+
+            # retrieve values based on the keys
+            # TODO: the probability should be aggregated for the same word
+            prob = torch.exp(-dist)
+            raise NotImplementedError
 
 
-def main(parsed_args):
+def main_adaptive(parsed_args):
+    assert args.use_adaptive_mem, "This script exclusively implements the adaptive memory"
     assert parsed_args.path is not None, '--path required for evaluation!'
 
     utils.import_user_module(parsed_args)
@@ -265,10 +288,6 @@ def main(parsed_args):
         print("Keys", dstore_keys.shape, dstore_keys.dtype)
         print("Vals", dstore_vals.shape, dstore_vals.dtype)
 
-    if args.use_adaptive_mem:
-        raise NotImplementedError
-        # TODO: Copy the data from this large maximum size memmap to a smaller memmap
-
     avg_nll_loss = -score_sum / count / math.log(2)  # convert to base 2
     logger.info('Evaluated {} tokens in {:.1f}s ({:.2f} tokens/s)'.format(
         gen_timer.n, gen_timer.sum, 1. / gen_timer.avg
@@ -280,18 +299,3 @@ def main(parsed_args):
     if args.output_word_stats:
         for ws in sorted(word_stats.values(), key=lambda x: x.count, reverse=True):
             logger.info(ws)
-
-
-def cli_main():
-    parser = options.get_eval_lm_parser()
-    args = options.parse_args_and_arch(parser)
-    if args.use_adaptive_mem:
-        print("!! Using adaptive main function...")
-        main_adaptive(args)
-    else:
-        print("!! Using normal main function...")
-        main(args)
-
-
-if __name__ == '__main__':
-    cli_main()
