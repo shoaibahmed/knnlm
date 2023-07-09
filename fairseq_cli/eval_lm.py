@@ -180,6 +180,9 @@ def main(parsed_args):
                 hypos = scorer.generate(models, sample)
             gen_timer.stop(sample['ntokens'])
 
+            key_dtype = np.float16 if args.dstore_fp16 else np.float32
+            val_dtype = np.int16 if args.dstore_fp16 else np.int
+
             for i, hypos_i in enumerate(hypos):
                 hypo = hypos_i[0]
                 if args.save_knnlm_dstore:
@@ -188,16 +191,9 @@ def main(parsed_args):
                         if dstore_idx + shape[0] > args.dstore_size:
                             shape = [args.dstore_size - dstore_idx]
                             hypo['dstore_keys'] = hypo['dstore_keys'][:shape[0]]
-                        if args.dstore_fp16:
-                            dstore_keys[dstore_idx:shape[0]+dstore_idx] = hypo['dstore_keys'].view(
-                                -1, args.decoder_embed_dim).cpu().numpy().astype(np.float16)
-                            dstore_vals[dstore_idx:shape[0]+dstore_idx] = hypo['tokens'].view(
-                                -1, 1).cpu().numpy().astype(np.int16)
-                        else:
-                            dstore_keys[dstore_idx:shape[0]+dstore_idx] = hypo['dstore_keys'].view(
-                                -1, args.decoder_embed_dim).cpu().numpy().astype(np.float32)
-                            dstore_vals[dstore_idx:shape[0]+dstore_idx] = hypo['tokens'].view(
-                                -1, 1).cpu().numpy().astype(np.int)
+
+                        dstore_keys[dstore_idx:shape[0]+dstore_idx] = hypo['dstore_keys'].view(-1, args.decoder_embed_dim).cpu().numpy().astype(key_dtype)
+                        dstore_vals[dstore_idx:shape[0]+dstore_idx] = hypo['tokens'].view(-1, 1).cpu().numpy().astype(val_dtype)
 
                         dstore_idx += shape[0]
                     else:
