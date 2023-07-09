@@ -80,7 +80,7 @@ We share Fairseq's instructions on how to train the language model here. Alterna
 ```bash
 python train.py --task language_modeling \
     data-bin/wikitext-103 \
-    --save-dir checkpoints/ \
+    --save-dir checkpoints_wiki103/ \
     --arch transformer_lm_wiki103 \
     --max-update 286000 --max-lr 1.0 --t-mult 2 --lr-period-updates 270000 --lr-scheduler cosine --lr-shrink 0.75 \
     --warmup-updates 16000 --warmup-init-lr 1e-07 --min-lr 1e-09 --optimizer nag --lr 0.0001 --clip-norm 0.1 \
@@ -96,7 +96,7 @@ For wikitext-2:
 python train.py --task language_modeling \
     data-bin/wikitext-2 \
     --save-dir checkpoints_wikitext2/ \
-    --arch transformer_lm_wiki103 \
+    --arch transformer_lm_wiki2 \
     --max-update 2860 --max-lr 1.0 --t-mult 2 --lr-period-updates 2700 --lr-scheduler cosine --lr-shrink 0.75 \
     --warmup-updates 160 --warmup-init-lr 1e-07 --min-lr 1e-09 --optimizer nag --lr 0.0001 --clip-norm 0.1 \
     --criterion adaptive_loss --max-tokens 3072 --update-freq 3 --tokens-per-sample 3072 --seed 1 --fp16 \
@@ -119,7 +119,7 @@ For wikitext-2:
 
 ```bash
 python eval_lm.py data-bin/wikitext-2 \
-    --path checkpoints/checkpoint_best.pt \
+    --path checkpoints_wikitext2/checkpoint_best.pt \
     --sample-break-mode complete --max-tokens 3072 \
     --context-window 2560 --softmax-batch 1024 \
     --gen-subset valid
@@ -151,11 +151,11 @@ For Wikitext-2, the total number of tokens in the training set is `2088628`. The
 
 ```bash
 python eval_lm.py data-bin/wikitext-2 \
-    --path checkpoints/checkpoint_best.pt \
+    --path checkpoints_wikitext2/checkpoint_best.pt \
     --sample-break-mode none --max-tokens 3072 \
     --softmax-batch 1024 --gen-subset train \
     --context-window 1536 --tokens-per-sample 1536 \
-    --dstore-mmap checkpoints/dstore --knn-keytype 'last_ffn_input' \
+    --dstore-mmap checkpoints_wikitext2/dstore --knn-keytype 'last_ffn_input' \
     --dstore-size 2087092 --model-overrides "{'knn_keytype': 'last_ffn_input'}" \
     --save-knnlm-dstore --fp16
 ```
