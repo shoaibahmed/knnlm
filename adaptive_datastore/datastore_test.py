@@ -1,7 +1,9 @@
 import torch
 
-from dataset import Dataset
+from datasets import Dataset
 from transformers import AutoModel, AutoTokenizer
+
+from gpt2_updated import GPT2LMHeadModel
 
 
 class InMemoryDataStore:
@@ -88,12 +90,9 @@ class InMemoryDataStore:
 
 
 class kNN_LM:
-    def __init__(self, model_name: str, representation_layer_hook: str='last_ffn_layer') -> None:
+    def __init__(self, model_name: str) -> None:
         # Load the model
         self.model, self.tokenizer = kNN_LM.load_model(model_name)
-        self.representation_layer_hook = representation_layer_hook
-
-        # TODO: Attach the hook to the model
 
         # Create the datastore
         self.dstore = InMemoryDataStore(dist_metric="squared_l2")
@@ -112,7 +111,8 @@ class kNN_LM:
             raise RuntimeError(f"Unknown model: {model_name}")
 
         # Load the model
-        model = AutoModel.from_pretrained(url)
+        # model = AutoModel.from_pretrained(url)
+        model = GPT2LMHeadModel.from_pretrained(url)
         tokenizer = AutoTokenizer.from_pretrained(url)
 
         return model, tokenizer
@@ -123,7 +123,7 @@ class kNN_LM:
 
         # dataset should give both extra context (from the previous sequence and the actual sequence itself)
         for extra_context, sequence in dataset:
-            pass
+            output, last_layer_ffn_input = self.model(x)
         raise NotImplementedError
 
 
