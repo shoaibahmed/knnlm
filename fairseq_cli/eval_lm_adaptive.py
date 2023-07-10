@@ -31,14 +31,14 @@ logging.basicConfig(
 logger = logging.getLogger('fairseq_cli.eval_lm_adaptive')
 
 
-class InMemoryRetrievalStore:
+class InMemoryDataStore:
     def __init__(self, dist_metric) -> None:
         self.k = None
         self.v = None
         assert dist_metric in ["l2", "squared_l2", "cosine"]
         self.dist_metric = dist_metric
     
-    def add_item_to_store(self, k, v):
+    def add_item_to_store(self, k: torch.Tensor, v: torch.Tensor) -> None:
         assert k.shape == v.shape, f"{k.shape} != {v.shape}"
         if len(k.shape) == 1:
             assert len(v.shape) == 1, v.shape
@@ -56,7 +56,8 @@ class InMemoryRetrievalStore:
             self.v = torch.concatenate([self.v, v], dim=0)
         print(f"!! New item added in memory store / k: {k.shape} / v: {v.shape}")
 
-    def get_knn_log_probs(self, q, lm_log_probs, num_nn=1024):
+    def get_knn_log_probs(self, q: torch.Tensor, lm_log_probs: torch.Tensor,
+                          num_nn: int=1024) -> torch.Tensor:
         if len(q.shape) == 1:
             q = q.expand_dim(dim=0)
 
@@ -88,16 +89,20 @@ class InMemoryRetrievalStore:
 
             # Compute aggregation of probabilities for the same word
             for idx in range(normalized_log_prob.shape[1]):
-                log_prob_vector.scatter_add_(dim=1, index=selected_vals[:, idx, None], src=normalized_log_prob[:, idx, None])
+                log_prob_vector.scatter_add_(dim=1, index=selected_vals[:, idx:idx+1], src=normalized_log_prob[:, idx:idx+1])
 
         # return the final prob vector
         return log_prob_vector
 
-    def get_combined_prob(self, lm_log_probs, lm_features, lambda_val, num_nn=1024):
+    def get_combined_prob(self, lm_log_probs: torch.Tensor, lm_features: torch.Tensor,
+                          lambda_val: float, num_nn: int=1024) -> torch.Tensor:
         knn_log_probs = self.get_knn_log_probs(lm_features, lm_log_probs, num_nn=num_nn)
         combined_log_probs = torch.logsumexp(torch.stack([lm_log_probs + torch.log(1. - lambda_val),
                                                           knn_log_probs + torch.log(lambda_val)]), dim=0)
         return combined_log_probs
+
+    def print_datastore_stats(self) -> None:
+        print(f"Datastore stats / Keys: {self.k.shape} / Values: {self.v.shape} / Distance metric: {self.dist_metric}")
 
 
 def main_adaptive(parsed_args):
@@ -191,27 +196,10 @@ def main_adaptive(parsed_args):
 
     word_stats = dict()
 
-    if args.knnlm and args.save_knnlm_dstore:
-        raise ValueError("Cannot use knnlm while trying to build the datastore!")
-
-    if args.knnlm:
-        knn_dstore = KNN_Dstore(args)
+    knn_dstore = InMemoryDataStore(args)
 
     with progress_bar.build_progress_bar(args, itr) as t:
         wps_meter = TimeMeter()
-
-        if args.save_knnlm_dstore:
-            print('keytype being saved:', args.knn_keytype)
-            if args.dstore_fp16:
-                print('Saving fp16')
-                dstore_keys = np.memmap(args.dstore_mmap+'_keys.npy', dtype=np.float16, mode='w+', shape=(args.dstore_size, args.decoder_embed_dim))
-                dstore_vals = np.memmap(args.dstore_mmap+'_vals.npy', dtype=np.int16, mode='w+', shape=(args.dstore_size, 1))
-            else:
-                print('Saving fp32')
-                dstore_keys = np.memmap(args.dstore_mmap+'_keys.npy', dtype=np.float32, mode='w+', shape=(args.dstore_size, args.decoder_embed_dim))
-                dstore_vals = np.memmap(args.dstore_mmap+'_vals.npy', dtype=np.int, mode='w+', shape=(args.dstore_size, 1))
-
-        dstore_idx = 0
         for ex_i, sample in enumerate(t):
             if 'net_input' not in sample:
                 continue
@@ -230,24 +218,13 @@ def main_adaptive(parsed_args):
 
             for i, hypos_i in enumerate(hypos):
                 hypo = hypos_i[0]
-                if args.save_knnlm_dstore:
-                    shape = hypo['dstore_keys'].shape
-                    if shape[0] == args.tokens_per_sample:
-                        if args.use_adaptive_mem:
-                            raise NotImplementedError
-                            # TODO: Decide based on log-prob whether this sequence needs to be stored or not
-                            # TODO: One very important detail -- the log prob should take into account the previously generated memory -- continuous updates
-
-                        if dstore_idx + shape[0] > args.dstore_size:
-                            shape = [args.dstore_size - dstore_idx]
-                            hypo['dstore_keys'] = hypo['dstore_keys'][:shape[0]]
-
-                        dstore_keys[dstore_idx:shape[0]+dstore_idx] = hypo['dstore_keys'].view(-1, args.decoder_embed_dim).cpu().numpy().astype(key_dtype)
-                        dstore_vals[dstore_idx:shape[0]+dstore_idx] = hypo['tokens'].view(-1, 1).cpu().numpy().astype(val_dtype)
-
-                        dstore_idx += shape[0]
-                    else:
-                        print('Skipping this one with shape', shape)
+                shape = hypo['dstore_keys'].shape
+                if shape[0] == args.tokens_per_sample:
+                    key = hypo['dstore_keys'].view(-1, args.decoder_embed_dim).cpu().numpy().astype(key_dtype)
+                    val = hypo['tokens'].view(-1, 1).cpu().numpy().astype(val_dtype)
+                    knn_dstore.add_item_to_store(key, val)
+                else:
+                    print('Skipping this one with shape', shape)
 
                 sample_id = sample['id'][i]
 
@@ -304,10 +281,7 @@ def main_adaptive(parsed_args):
             wps_meter.update(sample['ntokens'])
             t.log({'wps': round(wps_meter.avg)})
 
-    if args.save_knnlm_dstore:
-        print("dstore_idx", dstore_idx, "final shape", shape)
-        print("Keys", dstore_keys.shape, dstore_keys.dtype)
-        print("Vals", dstore_vals.shape, dstore_vals.dtype)
+    knn_dstore.print_datastore_stats()
 
     avg_nll_loss = -score_sum / count / math.log(2)  # convert to base 2
     logger.info('Evaluated {} tokens in {:.1f}s ({:.2f} tokens/s)'.format(
