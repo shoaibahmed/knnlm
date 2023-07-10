@@ -56,11 +56,11 @@ class InMemoryRetrievalStore:
             self.v = torch.concatenate([self.v, v], dim=0)
         print(f"!! New item added in memory store / k: {k.shape} / v: {v.shape}")
 
-    def get_knn_probs(self, q, lm_log_probs, num_nn=1024):
+    def get_knn_log_probs(self, q, lm_log_probs, num_nn=1024):
         if len(q.shape) == 1:
             q = q.expand_dim(dim=0)
 
-        prob_vector = torch.zeros_like(lm_log_probs)
+        log_prob_vector = torch.zeros_like(lm_log_probs)
         if self.k is not None:  # zero probability for every token otherwise
             # self.k shape: B x D
             if self.dist_metric in ["l2", "squared_l2"]:
@@ -82,21 +82,22 @@ class InMemoryRetrievalStore:
             selected_dists = torch.gather(dist, dim=1, index=nearest_neighbors)
             selected_vals = torch.gather(self.v, dim=1, index=nearest_neighbors)
 
-            # Compute the normalized probs
-            unnormalized_prob = torch.exp(-selected_dists)
-            normalized_prob = unnormalized_prob / unnormalized_prob.sum(dim=1, keepdims=True)
+            # Compute the normalized log-probs
+            unnormalized_log_prob = -selected_dists  # -dist since we are now in log-space
+            normalized_log_prob = unnormalized_log_prob - torch.logsumexp(unnormalized_log_prob, dim=1, keepdim=True)
 
-            # TODO: the probability should be aggregated for the same word
-            raise NotImplementedError
+            # Compute aggregation of probabilities for the same word
+            for idx in range(normalized_log_prob.shape[1]):
+                log_prob_vector.scatter_add_(dim=1, index=selected_vals[:, idx, None], src=normalized_log_prob[:, idx, None])
 
         # return the final prob vector
-        return prob_vector
+        return log_prob_vector
 
     def get_combined_prob(self, lm_log_probs, lm_features, lambda_val, num_nn=1024):
-        # TODO: Adjust the amalgamation of log probs and normal probs
-        knn_probs = self.get_knn_probs(lm_features, lm_log_probs, num_nn=num_nn)
-        final_probs = (1.-lambda_val) * lm_log_probs + lambda_val * knn_probs
-        return final_probs
+        knn_log_probs = self.get_knn_log_probs(lm_features, lm_log_probs, num_nn=num_nn)
+        combined_log_probs = torch.logsumexp(torch.stack([lm_log_probs + torch.log(1. - lambda_val),
+                                                          knn_log_probs + torch.log(lambda_val)]), dim=0)
+        return combined_log_probs
 
 
 def main_adaptive(parsed_args):
