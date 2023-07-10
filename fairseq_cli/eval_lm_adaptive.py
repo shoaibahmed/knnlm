@@ -35,37 +35,38 @@ class InMemoryRetrievalStore:
     def __init__(self, dist_metric) -> None:
         self.k = None
         self.v = None
-        assert dist_metric in ["euclidean", "cosine"]
+        assert dist_metric in ["l2", "squared_l2", "cosine"]
         self.dist_metric = dist_metric
     
     def add_item_to_store(self, k, v):
-        assert len(k.shape) == 1, k.shape
-        assert len(v.shape) == 1, v.shape
+        assert k.shape == v.shape, f"{k.shape} != {v.shape}"
+        if len(k.shape) == 1:
+            assert len(v.shape) == 1, v.shape
+            k = k.expand_dim(dim=0)
+            v = v.expand_dim(dim=0)
 
         if self.dist_metric == "cosine":
-            k = torch.nn.functional.normalize(k, p=2.0, dim=0)  # l2 normalize the key
+            k = torch.nn.functional.normalize(k, p=2.0, dim=1)  # l2 normalize the key
         if self.k is None:
             assert self.v is None
-            self.k = k.expand_dim(0)  # 1 x d
-            self.v = v.expand_dim(0)  # 1 x d'
+            self.k = k
+            self.v = v
         else:
             self.k = torch.concatenate([self.k, k], dim=0)
             self.v = torch.concatenate([self.v, v], dim=0)
         print(f"!! New item added in memory store / k: {k.shape} / v: {v.shape}")
 
-    def get_knn_vals(self, q, k):
-        assert isinstance(k, int), k
-        assert len(q.shape) == 1, q.shape
-        q = q.expand_dim(dim=0)
+    def get_knn_probs(self, q, lm_log_probs, num_nn=1024):
+        if len(q.shape) == 1:
+            q = q.expand_dim(dim=0)
 
-        if self.k is None:
-            return []
-        elif self.k.shape < k:
-            return self.v  # Return all vals
-        else:
+        prob_vector = torch.zeros_like(lm_log_probs)
+        if self.k is not None:  # zero probability for every token otherwise
             # self.k shape: B x D
-            if self.dist_metric == "euclidean":
-                dist = torch.sqrt((self.k - q) ** 2).sum(dim=1)
+            if self.dist_metric in ["l2", "squared_l2"]:
+                dist = ((self.k - q) ** 2).sum(dim=1)
+                if self.dist_metric == "l2":
+                    dist = torch.sqrt(dist)
             elif self.dist_metric == "cosine":
                 q = torch.nn.functional.normalize(q, p=2.0, dim=1)  # l2 normalize the query
                 sim = torch.matmul(q, self.k.T)  # (1 x D) x (N x D).T -> 1 x N
@@ -73,10 +74,29 @@ class InMemoryRetrievalStore:
             else:
                 raise RuntimeError(f"Unknown distance metric: {self.dist_metric}")
 
-            # retrieve values based on the keys
+            # Compute nearest neighbors based on the distance
+            dist_idx_sorted = torch.argsort(dist, dim=1, descending=False)
+            nearest_neighbors = dist_idx_sorted[:, :num_nn]
+
+            # Select the nearest neighbors
+            selected_dists = torch.gather(dist, dim=1, index=nearest_neighbors)
+            selected_vals = torch.gather(self.v, dim=1, index=nearest_neighbors)
+
+            # Compute the normalized probs
+            unnormalized_prob = torch.exp(-selected_dists)
+            normalized_prob = unnormalized_prob / unnormalized_prob.sum(dim=1, keepdims=True)
+
             # TODO: the probability should be aggregated for the same word
-            prob = torch.exp(-dist)
             raise NotImplementedError
+
+        # return the final prob vector
+        return prob_vector
+
+    def get_combined_prob(self, lm_log_probs, lm_features, lambda_val, num_nn=1024):
+        # TODO: Adjust the amalgamation of log probs and normal probs
+        knn_probs = self.get_knn_probs(lm_features, lm_log_probs, num_nn=num_nn)
+        final_probs = (1.-lambda_val) * lm_log_probs + lambda_val * knn_probs
+        return final_probs
 
 
 def main_adaptive(parsed_args):
