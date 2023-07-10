@@ -32,6 +32,12 @@ logger = logging.getLogger('fairseq_cli.eval_lm_adaptive')
 
 
 class InMemoryDataStore:
+    """
+    In memory variant of the datastore introduced in the kNN-LM paper (https://arxiv.org/abs/1911.00172).
+    It stores key-value pairs, and returns the log-probability of the next token leveraging both
+        the predicted next token probabilities from the LM (parametric memory) as well as the next
+        token probability from the nearest neighbors storted in the datastore (non-parametric memory).
+    """
     def __init__(self, dist_metric) -> None:
         self.k = None
         self.v = None
@@ -96,7 +102,10 @@ class InMemoryDataStore:
 
     def get_combined_prob(self, lm_log_probs: torch.Tensor, lm_features: torch.Tensor,
                           lambda_val: float, num_nn: int=1024) -> torch.Tensor:
+        # Get the log probs from the kNN
         knn_log_probs = self.get_knn_log_probs(lm_features, lm_log_probs, num_nn=num_nn)
+
+        # LogSumExp is used since the two probabities are added, which necessitates exponentiation due to log_probs
         combined_log_probs = torch.logsumexp(torch.stack([lm_log_probs + torch.log(1. - lambda_val),
                                                           knn_log_probs + torch.log(lambda_val)]), dim=0)
         return combined_log_probs
