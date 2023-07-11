@@ -116,3 +116,88 @@ class KNN_Dstore(object):
         # TxBx1
         return full_yhat_knn_prob.view(qshape[0], qshape[1], 1)
 
+
+class In_Memory_KNN_Dstore(KNN_Dstore):
+    def __init__(self, args):
+        super().__init__(args)
+        self.keys = None
+        self.values = None
+        self.dist_metric = "squared_l2"
+
+    def setup_faiss(self, args):
+        print("!! Skipping FAISS setup for in-memory KNN DStore...")
+        return  # don't do anything
+
+    def add_item_to_store(self, k: torch.Tensor, v: torch.Tensor) -> None:
+        assert len(k.shape) == len(v.shape), f"{k.shape} != {v.shape}"
+        if len(k.shape) == 1:
+            assert len(v.shape) == 1, v.shape
+            k = k.expand_dim(dim=0)
+            v = v.expand_dim(dim=0)
+
+        if isinstance(k, np.ndarray):
+            k = torch.from_numpy(k)
+        if isinstance(v, np.ndarray):
+            v = torch.from_numpy(v)
+
+        if self.dist_metric == "cosine":
+            k = torch.nn.functional.normalize(k, p=2.0, dim=1)  # l2 normalize the key
+        if self.keys is None:
+            assert self.values is None
+            self.keys = k
+            self.values = v
+        else:
+            self.keys = torch.cat([self.keys, k], dim=0)
+            self.values = torch.cat([self.values, v], dim=0)
+        print(f"!! New item added in memory store / k: {self.keys.shape} / v: {self.values.shape}")
+
+    def get_knns(self, queries):
+        # self.keys shape: B x D
+        if self.dist_metric in ["l2", "squared_l2"]:
+            dist = ((self.keys - queries) ** 2).sum(dim=1)
+            if self.dist_metric == "l2":
+                dist = torch.sqrt(dist)
+        elif self.dist_metric == "cosine":
+            queries = torch.nn.functional.normalize(queries, p=2.0, dim=1)  # l2 normalize the query
+            sim = torch.matmul(queries, self.keys.T)  # (1 x D) x (N x D).T -> 1 x N
+            dist = 1.0 - sim  # cosine distance
+        else:
+            raise RuntimeError(f"Unknown distance metric: {self.dist_metric}")
+
+        # Compute nearest neighbors based on the distance
+        dist_idx_sorted = torch.argsort(dist, dim=1, descending=False)
+        nearest_neighbors = dist_idx_sorted[:, :self.k]
+
+        # Select the nearest neighbors
+        selected_dists = torch.gather(dist, dim=1, index=nearest_neighbors)
+        selected_vals = torch.gather(self.values, dim=1, index=nearest_neighbors)
+
+        return selected_dists, selected_vals
+
+    def get_knn_log_prob(self, queries, tgt, pad_idx):
+        # queries  are TxBxC
+        # reshape: (TxB)xC
+        qshape = queries.shape
+        full_yhat_knn_prob = torch.full([qshape[0]*qshape[1]], -10000, dtype=torch.float32).cuda()
+
+        if self.keys is not None:
+            queries = queries.view(-1, qshape[-1])
+            tgt = tgt.contiguous().view(-1)
+            dists, vals = self.get_knns(queries[tgt != pad_idx])
+            # (T_reducedxB)xK
+            dists = dists.cuda()
+            probs = utils.log_softmax(-dists, dim=-1)
+
+            index_mask = torch.eq(vals.long().cuda().squeeze(-1), tgt[tgt != pad_idx].unsqueeze(-1)).float()
+            index_mask[index_mask == 0] = -10000 # for stability
+            index_mask[index_mask == 1] = 0
+
+            # (T_reducedxB)
+            yhat_knn_prob = torch.logsumexp(probs + index_mask, dim=-1).clone()
+            full_yhat_knn_prob[tgt != pad_idx] = yhat_knn_prob
+
+        # TxBx1
+        return full_yhat_knn_prob.view(qshape[0], qshape[1], 1)
+
+    def print_datastore_stats(self) -> None:
+        print(f"Datastore stats / Keys: {self.keys.shape} / Values: {self.values.shape} / Distance metric: {self.dist_metric}")

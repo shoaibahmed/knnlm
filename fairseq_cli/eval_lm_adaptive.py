@@ -19,7 +19,7 @@ from fairseq import checkpoint_utils, options, progress_bar, tasks, utils
 from fairseq.data import LMContextWindowDataset
 from fairseq.meters import StopwatchMeter, TimeMeter
 from fairseq.sequence_scorer import SequenceScorer
-from fairseq.knnlm import KNN_Dstore
+from fairseq.knnlm import In_Memory_KNN_Dstore
 
 logging.basicConfig(
     format='%(asctime)s | %(levelname)s | %(name)s | %(message)s',
@@ -234,7 +234,8 @@ def main_adaptive(parsed_args):
 
     word_stats = dict()
 
-    knn_dstore = InMemoryDataStore(dist_metric="squared_l2")
+    # knn_dstore = InMemoryDataStore(dist_metric="squared_l2")
+    knn_dstore = In_Memory_KNN_Dstore(args)
 
     with progress_bar.build_progress_bar(args, itr) as t:
         wps_meter = TimeMeter()
@@ -245,10 +246,7 @@ def main_adaptive(parsed_args):
             sample = utils.move_to_cuda(sample) if use_cuda else sample
 
             gen_timer.start()
-            if args.knnlm:
-                hypos = scorer.generate(models, sample, knn_dstore=knn_dstore)
-            else:
-                hypos = scorer.generate(models, sample)
+            hypos = scorer.generate(models, sample, knn_dstore=knn_dstore)
             gen_timer.stop(sample['ntokens'])
 
             key_dtype = np.float16 if args.dstore_fp16 else np.float32
