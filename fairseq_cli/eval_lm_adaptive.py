@@ -91,8 +91,8 @@ class InMemoryDataStore:
             self.v = torch.cat([self.v, v], dim=0)
         print(f"!! New item added in memory store / k: {self.k.shape} / v: {self.v.shape}")
 
-    def get_knn_log_probs(self, q: torch.Tensor, lm_log_probs: torch.Tensor,
-                          num_nn: int=1024) -> torch.Tensor:
+    def get_knn_log_prob(self, q: torch.Tensor, lm_log_probs: torch.Tensor,
+                         num_nn: int=1024) -> torch.Tensor:
         if len(q.shape) == 1:
             q = q.expand_dim(dim=0)
 
@@ -129,10 +129,10 @@ class InMemoryDataStore:
         # return the final prob vector
         return log_prob_vector
 
-    def get_combined_prob(self, lm_log_probs: torch.Tensor, lm_features: torch.Tensor,
-                          lambda_val: float, num_nn: int=1024) -> torch.Tensor:
+    def get_knn_lm_log_prob(self, lm_log_probs: torch.Tensor, lm_features: torch.Tensor,
+                            lambda_val: float, num_nn: int=1024) -> torch.Tensor:
         # Get the log probs from the kNN
-        knn_log_probs = self.get_knn_log_probs(lm_features, lm_log_probs, num_nn=num_nn)
+        knn_log_probs = self.get_knn_log_prob(lm_features, lm_log_probs, num_nn=num_nn)
 
         # LogSumExp is used since the two probabities are added, which necessitates exponentiation due to log_probs
         combined_log_probs = torch.logsumexp(torch.stack([lm_log_probs + torch.log(1. - lambda_val),
