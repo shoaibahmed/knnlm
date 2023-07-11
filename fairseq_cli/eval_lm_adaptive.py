@@ -20,8 +20,6 @@ from fairseq.data import LMContextWindowDataset
 from fairseq.meters import StopwatchMeter, TimeMeter
 from fairseq.sequence_scorer import SequenceScorer
 from fairseq.knnlm import KNN_Dstore
-from .eval_lm import WordStat
-
 
 logging.basicConfig(
     format='%(asctime)s | %(levelname)s | %(name)s | %(message)s',
@@ -29,6 +27,32 @@ logging.basicConfig(
     level=logging.INFO,
 )
 logger = logging.getLogger('fairseq_cli.eval_lm_adaptive')
+
+
+class WordStat(object):
+    def __init__(self, word, is_bpe):
+        self.word = word
+        self.is_bpe = is_bpe
+        self.log_prob = 0
+        self.next_word_prob = 0
+        self.count = 0
+        self.missing_next_words = 0
+
+    def add(self, log_prob, next_word_prob):
+        """ increments counters for the sum of log probs of current word and next
+            word (given context ending at current word). Since the next word might be at the end of the example,
+            or it might be not counted because it is not an ending subword unit,
+            also keeps track of how many of those we have seen """
+        if next_word_prob is not None:
+            self.next_word_prob += next_word_prob
+        else:
+            self.missing_next_words += 1
+        self.log_prob += log_prob
+        self.count += 1
+
+    def __str__(self):
+        return '{}\t{}\t{}\t{}\t{}\t{}'.format(self.word, self.count, self.log_prob, self.is_bpe,
+                                               self.next_word_prob, self.count - self.missing_next_words)
 
 
 class InMemoryDataStore:
@@ -45,11 +69,16 @@ class InMemoryDataStore:
         self.dist_metric = dist_metric
     
     def add_item_to_store(self, k: torch.Tensor, v: torch.Tensor) -> None:
-        assert k.shape == v.shape, f"{k.shape} != {v.shape}"
+        assert len(k.shape) == len(v.shape), f"{k.shape} != {v.shape}"
         if len(k.shape) == 1:
             assert len(v.shape) == 1, v.shape
             k = k.expand_dim(dim=0)
             v = v.expand_dim(dim=0)
+
+        if isinstance(k, np.ndarray):
+            k = torch.from_numpy(k)
+        if isinstance(v, np.ndarray):
+            v = torch.from_numpy(v)
 
         if self.dist_metric == "cosine":
             k = torch.nn.functional.normalize(k, p=2.0, dim=1)  # l2 normalize the key
@@ -58,9 +87,9 @@ class InMemoryDataStore:
             self.k = k
             self.v = v
         else:
-            self.k = torch.concatenate([self.k, k], dim=0)
-            self.v = torch.concatenate([self.v, v], dim=0)
-        print(f"!! New item added in memory store / k: {k.shape} / v: {v.shape}")
+            self.k = torch.cat([self.k, k], dim=0)
+            self.v = torch.cat([self.v, v], dim=0)
+        print(f"!! New item added in memory store / k: {self.k.shape} / v: {self.v.shape}")
 
     def get_knn_log_probs(self, q: torch.Tensor, lm_log_probs: torch.Tensor,
                           num_nn: int=1024) -> torch.Tensor:
@@ -115,7 +144,6 @@ class InMemoryDataStore:
 
 
 def main_adaptive(parsed_args):
-    assert args.use_adaptive_mem, "This script exclusively implements the adaptive memory"
     assert parsed_args.path is not None, '--path required for evaluation!'
 
     utils.import_user_module(parsed_args)
@@ -142,6 +170,7 @@ def main_adaptive(parsed_args):
             setattr(args, arg, getattr(parsed_args, arg))
 
     # reduce tokens per sample by the required context window size
+    assert args.use_adaptive_mem, "This script exclusively implements the adaptive memory"
     args.tokens_per_sample -= args.context_window
     task = tasks.setup_task(args)
 
@@ -205,7 +234,7 @@ def main_adaptive(parsed_args):
 
     word_stats = dict()
 
-    knn_dstore = InMemoryDataStore(args)
+    knn_dstore = InMemoryDataStore(dist_metric="squared_l2")
 
     with progress_bar.build_progress_bar(args, itr) as t:
         wps_meter = TimeMeter()
