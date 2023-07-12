@@ -153,51 +153,55 @@ class In_Memory_KNN_Dstore(KNN_Dstore):
 
     def get_knns(self, queries):
         # self.keys shape: B x D
+        queries = queries.detach().cpu()
         if self.dist_metric in ["l2", "squared_l2"]:
-            dist = ((self.keys - queries) ** 2).sum(dim=1)
+            dist = ((queries[:, None, :] - self.keys[None, :, :]) ** 2).sum(dim=2)  # (N' x 1, D) - (1 x N x D).T -> N' x N x D -> N' x N
             if self.dist_metric == "l2":
                 dist = torch.sqrt(dist)
         elif self.dist_metric == "cosine":
             queries = torch.nn.functional.normalize(queries, p=2.0, dim=1)  # l2 normalize the query
-            sim = torch.matmul(queries, self.keys.T)  # (1 x D) x (N x D).T -> 1 x N
+            sim = torch.matmul(queries, self.keys.T)  # (N' x D) x (N x D).T -> N' x N
             dist = 1.0 - sim  # cosine distance
         else:
             raise RuntimeError(f"Unknown distance metric: {self.dist_metric}")
 
         # Compute nearest neighbors based on the distance
         dist_idx_sorted = torch.argsort(dist, dim=1, descending=False)
-        nearest_neighbors = dist_idx_sorted[:, :self.k]
+        nearest_neighbors = dist_idx_sorted[:, :self.k]  # as distances are sorted in ascending order
 
         # Select the nearest neighbors
         selected_dists = torch.gather(dist, dim=1, index=nearest_neighbors)
-        selected_vals = torch.gather(self.values, dim=1, index=nearest_neighbors)
+        # selected_vals = torch.gather(self.values, dim=1, index=nearest_neighbors)
+        selected_vals = torch.stack([torch.gather(self.values[:, 0], dim=0, index=nearest_neighbors[i, :])
+                                     for i in range(nearest_neighbors.shape[0])], dim=0)  # values are tensor of size [N' x 1]
 
         return selected_dists, selected_vals
 
     def get_knn_log_prob(self, queries, tgt, pad_idx):
-        # queries  are TxBxC
-        # reshape: (TxB)xC
-        qshape = queries.shape
-        full_yhat_knn_prob = torch.full([qshape[0]*qshape[1]], -10000, dtype=torch.float32).cuda()
+        with torch.no_grad():
+            # queries  are TxBxC
+            # reshape: (TxB)xC
+            qshape = queries.shape
+            full_yhat_knn_prob = torch.full([qshape[0]*qshape[1]], -10000, dtype=torch.float32).cuda()
 
-        if self.keys is not None:
-            queries = queries.view(-1, qshape[-1])
-            tgt = tgt.contiguous().view(-1)
-            dists, vals = self.get_knns(queries[tgt != pad_idx])
-            # (T_reducedxB)xK
-            dists = dists.cuda()
-            probs = utils.log_softmax(-dists, dim=-1)
+            if self.keys is not None:
+                queries = queries.view(-1, qshape[-1])
+                tgt = tgt.contiguous().view(-1)
+                dists, vals = self.get_knns(queries[tgt != pad_idx])
+                # (T_reducedxB)xK
+                dists = dists.cuda()
+                probs = utils.log_softmax(-dists, dim=-1)
 
-            index_mask = torch.eq(vals.long().cuda().squeeze(-1), tgt[tgt != pad_idx].unsqueeze(-1)).float()
-            index_mask[index_mask == 0] = -10000 # for stability
-            index_mask[index_mask == 1] = 0
+                index_mask = torch.eq(vals.long().cuda().squeeze(-1), tgt[tgt != pad_idx].unsqueeze(-1)).float()
+                index_mask[index_mask == 0] = -10000 # for stability
+                index_mask[index_mask == 1] = 0
 
-            # (T_reducedxB)
-            yhat_knn_prob = torch.logsumexp(probs + index_mask, dim=-1).clone()
-            full_yhat_knn_prob[tgt != pad_idx] = yhat_knn_prob
+                # (T_reducedxB)
+                yhat_knn_prob = torch.logsumexp(probs + index_mask, dim=-1).clone()
+                full_yhat_knn_prob[tgt != pad_idx] = yhat_knn_prob
 
-        # TxBx1
-        return full_yhat_knn_prob.view(qshape[0], qshape[1], 1)
+            # TxBx1
+            return full_yhat_knn_prob.view(qshape[0], qshape[1], 1)
 
     def print_datastore_stats(self) -> None:
         print(f"Datastore stats / Keys: {self.keys.shape} / Values: {self.values.shape} / Distance metric: {self.dist_metric}")
