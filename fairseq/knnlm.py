@@ -6,6 +6,7 @@ from fairseq import utils
 import time
 from fairseq.data import Dictionary
 
+
 class KNN_Dstore(object):
     def __init__(self, args):
         self.half = args.fp16
@@ -123,37 +124,55 @@ class In_Memory_KNN_Dstore(KNN_Dstore):
         self.keys = None
         self.values = None
         self.dist_metric = "squared_l2"
+        self.use_vector_db = False
+        self.use_cuda = True
+        self.device = torch.device("cuda" if torch.cuda.is_available() and self.use_cuda else "cpu")
+        print("!! Vector database device:", self.device)
+        if self.use_vector_db:
+            self.setup_vector_db(args)
 
     def setup_faiss(self, args):
         print("!! Skipping FAISS setup for in-memory KNN DStore...")
         return  # don't do anything
 
-    def add_item_to_store(self, k: torch.Tensor, v: torch.Tensor) -> None:
-        assert len(k.shape) == len(v.shape), f"{k.shape} != {v.shape}"
-        if len(k.shape) == 1:
-            assert len(v.shape) == 1, v.shape
-            k = k.expand_dim(dim=0)
-            v = v.expand_dim(dim=0)
+    def setup_vector_db(self, args):
+        print("!! Setting up Redis for in-memory KNN DStore...")
+        raise NotImplementedError
+        # TODO: Create a vector store client
 
+    def add_item_to_store(self, k: torch.Tensor, v: torch.Tensor) -> None:
         if isinstance(k, np.ndarray):
             k = torch.from_numpy(k)
         if isinstance(v, np.ndarray):
             v = torch.from_numpy(v)
 
+        k = k.to(self.device)
+        v = v.to(self.device)
+
         if self.dist_metric == "cosine":
             k = torch.nn.functional.normalize(k, p=2.0, dim=1)  # l2 normalize the key
-        if self.keys is None:
-            assert self.values is None
-            self.keys = k
-            self.values = v
+
+        if self.use_vector_db:
+            # TODO: Add vector store integration here
+            print(f"!! New item added to the vector datastore")
+            raise NotImplementedError
         else:
-            self.keys = torch.cat([self.keys, k], dim=0)
-            self.values = torch.cat([self.values, v], dim=0)
-        print(f"!! New item added in memory store / k: {self.keys.shape} / v: {self.values.shape}")
+            if self.keys is None:
+                assert self.values is None
+                self.keys = k
+                self.values = v
+            else:
+                self.keys = torch.cat([self.keys, k], dim=0)
+                self.values = torch.cat([self.values, v], dim=0)
+            print(f"!! New item added in memory store / k: {self.keys.shape} / v: {self.values.shape}")
 
     def get_knns(self, queries):
+        if self.use_vector_db:
+            # TODO: Add vector store integration here
+            raise NotImplementedError
+
         # self.keys shape: B x D
-        queries = queries.detach().cpu()
+        queries = queries.detach().to(self.device)
         if self.dist_metric in ["l2", "squared_l2"]:
             dist = ((queries[:, None, :] - self.keys[None, :, :]) ** 2).sum(dim=2)  # (N' x 1, D) - (1 x N x D).T -> N' x N x D -> N' x N
             if self.dist_metric == "l2":
