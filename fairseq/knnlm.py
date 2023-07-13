@@ -137,6 +137,7 @@ class In_Memory_KNN_Dstore(KNN_Dstore):
         self.use_cuda = True
         self.device = torch.device("cuda" if torch.cuda.is_available() and self.use_cuda else "cpu")
         self.iterator = 0
+        self.index_intialized = False
         print("!! Vector database device:", self.device)
         if self.use_vector_db:
             self.setup_vector_db(args)
@@ -181,6 +182,17 @@ class In_Memory_KNN_Dstore(KNN_Dstore):
             self.vector_db.insert(entities)
             self.iterator += b
             print(f"!! New {b} item(s) added to the vector datastore")
+
+            if self.index_intialized:
+                # Create an index for the vector DB
+                print("!! Generating index for the vector database")
+                index = {
+                    "index_type": "IVF_FLAT",
+                    "metric_type": "L2",
+                    "params": {"nlist": 128},
+                }
+                self.vector_db.create_index("embeddings", index)
+                self.index_intialized = True
         else:
             if self.keys is None:
                 assert self.values is None
@@ -193,15 +205,26 @@ class In_Memory_KNN_Dstore(KNN_Dstore):
 
     def get_knns(self, queries):
         if self.use_vector_db:
-            # TODO: Add vector store integration here
-            raise NotImplementedError
-            self.vector_db.load()
-            vectors_to_search = entities[-1][-2:]
+            # Search the vector store
+            vectors_to_search = [x.tolist() for x in queries.cpu().numpy()]
             search_params = {
                 "metric_type": "l2",
                 "params": {"nprobe": 10},
             }
-            result = hello_milvus.search(vectors_to_search, "embeddings", search_params, limit=3, output_fields=["random"])
+            result = self.vector_db.search(vectors_to_search, "embeddings", search_params, limit=self.k, output_fields=["next_token"])
+
+            selected_dists = []
+            selected_vals = []
+            for hits in result:
+                selected_dists.append([])
+                selected_vals.append([])
+                for hit in hits:
+                    selected_dists[-1].append(float(hit.distance))
+                    selected_vals[-1].append(hit.entity.get('next_token'))
+                    # print(f"hit: {hit}, random field: {hit.entity.get('next_token')}")
+            selected_dists = torch.tensor(selected_dists)
+            selected_vals = torch.tensor(selected_vals)
+            return selected_dists, selected_vals
 
         # self.keys shape: B x D
         queries = queries.detach().to(self.device)
@@ -235,7 +258,7 @@ class In_Memory_KNN_Dstore(KNN_Dstore):
             qshape = queries.shape
             full_yhat_knn_prob = torch.full([qshape[0]*qshape[1]], -10000, dtype=torch.float32).cuda()
 
-            if self.keys is not None:
+            if self.keys is not None or self.iterator > 0:  # iterator takes care of the vector db
                 queries = queries.view(-1, qshape[-1])
                 tgt = tgt.contiguous().view(-1)
                 dists, vals = self.get_knns(queries[tgt != pad_idx])
