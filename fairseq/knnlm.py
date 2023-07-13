@@ -6,6 +6,15 @@ from fairseq import utils
 import time
 from fairseq.data import Dictionary
 
+from pymilvus import (
+    connections,
+    utility,
+    FieldSchema,
+    CollectionSchema,
+    DataType,
+    Collection,
+)
+
 
 class KNN_Dstore(object):
     def __init__(self, args):
@@ -124,9 +133,10 @@ class In_Memory_KNN_Dstore(KNN_Dstore):
         self.keys = None
         self.values = None
         self.dist_metric = "squared_l2"
-        self.use_vector_db = False
+        self.use_vector_db = True
         self.use_cuda = True
         self.device = torch.device("cuda" if torch.cuda.is_available() and self.use_cuda else "cpu")
+        self.iterator = 0
         print("!! Vector database device:", self.device)
         if self.use_vector_db:
             self.setup_vector_db(args)
@@ -136,9 +146,18 @@ class In_Memory_KNN_Dstore(KNN_Dstore):
         return  # don't do anything
 
     def setup_vector_db(self, args):
-        print("!! Setting up Redis for in-memory KNN DStore...")
-        raise NotImplementedError
-        # TODO: Create a vector store client
+        print("!! Setting up vector database for in-memory KNN DStore...")
+        # https://milvus.io/docs/v2.0.x/example_code.md
+        connections.connect(alias="default", host="localhost", port="19530")
+
+        # Create the schema
+        fields = [
+            FieldSchema(name="pk", dtype=DataType.INT64, is_primary=True, auto_id=False),
+            FieldSchema(name="embeddings", dtype=DataType.FLOAT_VECTOR, dim=1024),
+            FieldSchema(name="next_token", dtype=DataType.INT64),
+        ]
+        schema = CollectionSchema(fields, "Next token database")
+        self.vector_db = Collection("next_token_db", schema)
 
     def add_item_to_store(self, k: torch.Tensor, v: torch.Tensor) -> None:
         if isinstance(k, np.ndarray):
@@ -153,9 +172,15 @@ class In_Memory_KNN_Dstore(KNN_Dstore):
             k = torch.nn.functional.normalize(k, p=2.0, dim=1)  # l2 normalize the key
 
         if self.use_vector_db:
-            # TODO: Add vector store integration here
-            print(f"!! New item added to the vector datastore")
-            raise NotImplementedError
+            b = len(k)
+            entities = [
+                [self.iterator+i for i in range(b)],
+                [x.tolist() for x in k.cpu().numpy()],
+                [x.tolist()[0] for x in v.cpu().numpy()],
+            ]
+            self.vector_db.insert(entities)
+            self.iterator += b
+            print(f"!! New {b} item(s) added to the vector datastore")
         else:
             if self.keys is None:
                 assert self.values is None
@@ -170,6 +195,13 @@ class In_Memory_KNN_Dstore(KNN_Dstore):
         if self.use_vector_db:
             # TODO: Add vector store integration here
             raise NotImplementedError
+            self.vector_db.load()
+            vectors_to_search = entities[-1][-2:]
+            search_params = {
+                "metric_type": "l2",
+                "params": {"nprobe": 10},
+            }
+            result = hello_milvus.search(vectors_to_search, "embeddings", search_params, limit=3, output_fields=["random"])
 
         # self.keys shape: B x D
         queries = queries.detach().to(self.device)
@@ -223,4 +255,7 @@ class In_Memory_KNN_Dstore(KNN_Dstore):
             return full_yhat_knn_prob.view(qshape[0], qshape[1], 1)
 
     def print_datastore_stats(self) -> None:
-        print(f"Datastore stats / Keys: {self.keys.shape} / Values: {self.values.shape} / Distance metric: {self.dist_metric}")
+        if self.use_vector_db:
+            print(f"Vector database size: {self.iterator}")
+        else:
+            print(f"Datastore stats / Keys: {self.keys.shape} / Values: {self.values.shape} / Distance metric: {self.dist_metric}")
