@@ -177,7 +177,7 @@ class In_Memory_KNN_Dstore(KNN_Dstore):
             entities = [
                 [self.iterator+i for i in range(b)],
                 [x.tolist() for x in k.cpu().numpy()],
-                [x.tolist()[0] for x in v.cpu().numpy()],
+                [int(x.tolist()[0]) for x in v.cpu().numpy()],  # convert the vector to int
             ]
             self.vector_db.insert(entities)
             self.iterator += b
@@ -204,6 +204,7 @@ class In_Memory_KNN_Dstore(KNN_Dstore):
             print(f"!! New item added in memory store / k: {self.keys.shape} / v: {self.values.shape}")
 
     def get_knns(self, queries):
+        assert len(queries.shape) == 2, queries.shape
         if self.use_vector_db:
             # Search the vector store
             vectors_to_search = [x.tolist() for x in queries.cpu().numpy()]
@@ -215,10 +216,10 @@ class In_Memory_KNN_Dstore(KNN_Dstore):
 
             selected_dists = []
             selected_vals = []
-            for hits in result:
+            for hits in result:  # iterate over queries
                 selected_dists.append([])
                 selected_vals.append([])
-                for hit in hits:
+                for hit in hits:  # iterate over nearest neighbors for each query
                     selected_dists[-1].append(float(hit.distance))
                     selected_vals[-1].append(hit.entity.get('next_token'))
                     # print(f"hit: {hit}, random field: {hit.entity.get('next_token')}")

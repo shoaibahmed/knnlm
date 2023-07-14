@@ -118,9 +118,8 @@ class InMemoryDataStore:
             selected_dists = torch.gather(dist, dim=1, index=nearest_neighbors)
             selected_vals = torch.gather(self.v, dim=1, index=nearest_neighbors)
 
-            # Compute the normalized log-probs
-            unnormalized_log_prob = -selected_dists  # -dist since we are now in log-space
-            normalized_log_prob = unnormalized_log_prob - torch.logsumexp(unnormalized_log_prob, dim=1, keepdim=True)
+            # Compute the normalized log-probs (probability is proportional to the negative distance)
+            normalized_log_prob = torch.nn.functional.log_softmax(-selected_dists, dim=-1)
 
             # Compute aggregation of probabilities for the same word
             for idx in range(normalized_log_prob.shape[1]):
