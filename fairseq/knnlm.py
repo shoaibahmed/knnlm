@@ -136,8 +136,9 @@ class In_Memory_KNN_Dstore(KNN_Dstore):
         self.use_vector_db = True
         self.use_cuda = True
         self.device = torch.device("cuda" if torch.cuda.is_available() and self.use_cuda else "cpu")
-        self.iterator = 0
-        self.index_intialized = False
+        self.iterator = 0  # counts the number of items
+        self.index_update_steps = 5
+        self.insertion_steps = 0  # counts the number of insertions to identify index update
         print("!! Vector database device:", self.device)
         if self.use_vector_db:
             self.setup_vector_db(args)
@@ -166,12 +167,6 @@ class In_Memory_KNN_Dstore(KNN_Dstore):
         if isinstance(v, np.ndarray):
             v = torch.from_numpy(v)
 
-        k = k.to(self.device)
-        v = v.to(self.device)
-
-        if self.dist_metric == "cosine":
-            k = torch.nn.functional.normalize(k, p=2.0, dim=1)  # l2 normalize the key
-
         if self.use_vector_db:
             b = len(k)
             entities = [
@@ -183,7 +178,8 @@ class In_Memory_KNN_Dstore(KNN_Dstore):
             self.iterator += b
             print(f"!! New {b} item(s) added to the vector datastore")
 
-            if self.index_intialized:
+            # update the index
+            if self.insertion_steps % self.index_update_steps == 0:
                 # Create an index for the vector DB
                 print("!! Generating index for the vector database")
                 index = {
@@ -192,8 +188,17 @@ class In_Memory_KNN_Dstore(KNN_Dstore):
                     "params": {"nlist": 128},
                 }
                 self.vector_db.create_index("embeddings", index)
-                self.index_intialized = True
+
+                print("!! Loading vector collection in memory")
+                self.vector_db.load()  # load the collection in memory for vector search
+            self.insertion_steps += 1
         else:
+            k = k.to(self.device)
+            v = v.to(self.device)
+
+            if self.dist_metric == "cosine":
+                k = torch.nn.functional.normalize(k, p=2.0, dim=1)  # l2 normalize the key
+
             if self.keys is None:
                 assert self.values is None
                 self.keys = k
@@ -280,6 +285,6 @@ class In_Memory_KNN_Dstore(KNN_Dstore):
 
     def print_datastore_stats(self) -> None:
         if self.use_vector_db:
-            print(f"Vector database size: {self.iterator}")
+            print(f"Milvus vector database / Size: {self.iterator} / Insertion steps: {self.insertion_steps}")
         else:
             print(f"Datastore stats / Keys: {self.keys.shape} / Values: {self.values.shape} / Distance metric: {self.dist_metric}")

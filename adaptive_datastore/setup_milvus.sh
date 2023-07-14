@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # download docker file
-wget https://github.com/milvus-io/milvus/releases/download/v2.0.2/milvus-standalone-docker-compose.yml -O docker-compose.yml
+wget https://github.com/milvus-io/milvus/releases/download/v2.2.0/milvus-standalone-docker-compose.yml -O docker-compose.yml
 
 # start the docker container
 sudo docker-compose up -d
