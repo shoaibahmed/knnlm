@@ -161,6 +161,16 @@ class In_Memory_KNN_Dstore(KNN_Dstore):
         schema = CollectionSchema(fields, "Next token database")
         self.vector_db = Collection("next_token_db", schema)
 
+        # Create index
+        print("!! Creating index at the start for vector database")
+        index = {
+            "index_type": "IVF_FLAT",
+            "metric_type": "L2",
+            "params": {"nlist": 128},
+        }
+        self.vector_db.create_index("embeddings", index)
+        self.vector_db.load()  # load the collection in memory for vector search
+
     def add_item_to_store(self, k: torch.Tensor, v: torch.Tensor) -> None:
         if isinstance(k, np.ndarray):
             k = torch.from_numpy(k)
@@ -179,24 +189,27 @@ class In_Memory_KNN_Dstore(KNN_Dstore):
             print(f"!! New {b} item(s) added to the vector datastore")
 
             # update the index
-            if self.insertion_steps % self.index_update_steps == 0:
-                if self.insertion_steps > 0:
-                    # Release collection first to create an index
-                    print("!! Releasing vector collection for index creation")
-                    self.vector_db.release()
+            rebuild_index = False
+            if rebuild_index:  # not really necessary (https://github.com/milvus-io/milvus/discussions/22280)
+                if self.insertion_steps % self.index_update_steps == 0:
+                    if self.insertion_steps > 0:
+                        # Release collection first to create an index
+                        print("!! Releasing vector collection for index creation")
+                        self.vector_db.release()
 
-                # Create an index for the vector DB
-                print("!! Generating index for the vector database")
-                index = {
-                    "index_type": "IVF_FLAT",
-                    "metric_type": "L2",
-                    "params": {"nlist": 128},
-                }
-                self.vector_db.create_index("embeddings", index)
+                    # Create an index for the vector DB
+                    print("!! Generating index for the vector database")
+                    index = {
+                        "index_type": "IVF_FLAT",
+                        "metric_type": "L2",
+                        "params": {"nlist": 128},
+                    }
+                    self.vector_db.create_index("embeddings", index)
 
-                print("!! Loading vector collection in memory")
-                self.vector_db.load()  # load the collection in memory for vector search
+                    print("!! Loading vector collection in memory")
+                    self.vector_db.load()  # load the collection in memory for vector search
             self.insertion_steps += 1
+
         else:
             k = k.to(self.device)
             v = v.to(self.device)
