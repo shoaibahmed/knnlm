@@ -180,6 +180,11 @@ class In_Memory_KNN_Dstore(KNN_Dstore):
 
             # update the index
             if self.insertion_steps % self.index_update_steps == 0:
+                if self.insertion_steps > 0:
+                    # Release collection first to create an index
+                    print("!! Releasing vector collection for index creation")
+                    self.vector_db.release()
+
                 # Create an index for the vector DB
                 print("!! Generating index for the vector database")
                 index = {
