@@ -1,4 +1,5 @@
-!#/bin/bash
+#!/bin/bash
+# Adapted from https://github.com/facebookresearch/MIXER/blob/master/prepareData.sh
 
 URLS=(
     "https://data.statmt.org/news-crawl/en/news.2020.en.shuffled.deduped.gz"
@@ -26,7 +27,7 @@ for ((i=0;i<${#URLS[@]};++i)); do
             tar xvf $file
         elif [ ${file: -4} == ".zip" ]; then
             unzip $file
-        elif [ ${file: -4} == ".gz" ]; then
+        elif [ ${file: -3} == ".gz" ]; then
             gunzip $file
         fi
     fi
