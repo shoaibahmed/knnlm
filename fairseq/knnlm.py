@@ -219,7 +219,7 @@ class In_Memory_KNN_Dstore(KNN_Dstore):
             # Search the vector store
             vectors_to_search = [x.tolist() for x in queries.cpu().numpy()]
             search_params = {
-                "metric_type": "l2",
+                "metric_type": "L2",
                 "params": {"nprobe": 10},
             }
             result = self.vector_db.search(vectors_to_search, "embeddings", search_params, limit=self.k, output_fields=["next_token"])
