@@ -133,9 +133,10 @@ class In_Memory_KNN_Dstore(KNN_Dstore):
         self.keys = None
         self.values = None
         self.dist_metric = "squared_l2"
-        self.use_vector_db = True
+        self.use_vector_db = False
         self.use_cuda = True
         self.device = torch.device("cuda" if torch.cuda.is_available() and self.use_cuda else "cpu")
+        self.use_half_prec = True
         self.iterator = 0  # counts the number of items
         self.index_update_steps = 5
         self.insertion_steps = 0  # counts the number of insertions to identify index update
@@ -176,6 +177,9 @@ class In_Memory_KNN_Dstore(KNN_Dstore):
             k = torch.from_numpy(k)
         if isinstance(v, np.ndarray):
             v = torch.from_numpy(v)
+
+        if self.use_half_prec:
+            k = k.half()  # only keys are required to be converted
 
         if self.use_vector_db:
             b = len(k)
@@ -228,6 +232,9 @@ class In_Memory_KNN_Dstore(KNN_Dstore):
 
     def get_knns(self, queries):
         assert len(queries.shape) == 2, queries.shape
+        if self.use_half_prec:
+            queries = queries.half()  # only keys are in half precision
+
         if self.use_vector_db:
             # Search the vector store
             vectors_to_search = [x.tolist() for x in queries.cpu().numpy()]

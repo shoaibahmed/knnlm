@@ -249,7 +249,7 @@ def main_adaptive(parsed_args):
             gen_timer.stop(sample['ntokens'])
 
             key_dtype = np.float16 if args.dstore_fp16 else np.float32
-            val_dtype = np.int16 if args.dstore_fp16 else np.int
+            val_dtype = np.int16 if args.dstore_fp16 else np.int32
 
             for i, hypos_i in enumerate(hypos):
                 hypo = hypos_i[0]
