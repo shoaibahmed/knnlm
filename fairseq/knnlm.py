@@ -148,7 +148,7 @@ class In_Memory_KNN_Dstore(KNN_Dstore):
         else:
             self.use_cuda = False
             if self.use_temporary_cache:
-                self.use_half_prec = False  # encountors an error on add elements to index when turned on
+                self.use_half_prec = False  # FAISS doesn't support half precision keys
                 self.index = None
                 self.index_nprobe = args.probe
                 self.use_gpu_index = True
