@@ -135,34 +135,38 @@ class In_Memory_KNN_Dstore(KNN_Dstore):
         self.dist_metric = "squared_l2"
         self.use_vector_db = False
         self.device = None
-        self.use_half_prec = True
+        self.use_half_prec = False
         self.iterator = 0  # counts the number of items
         self.index_update_steps = 5
         self.insertion_steps = 0  # counts the number of insertions to identify index update
         self.temporary_cache = None
         self.use_gpu_index = None
         self.use_temporary_cache = True
-        if self.use_vector_db:
-            self.setup_vector_db(args)
-        else:
-            self.use_cuda = True
-            torch.device("cuda" if torch.cuda.is_available() and self.use_cuda else "cpu")
-            print("!! Keystore device:", self.device)
 
+        if self.use_vector_db:
+            self.setup_vector_db()
+        else:
             if self.use_temporary_cache:
                 self.index = None
-                self.use_gpu_index = True
+                self.use_gpu_index = False
+                self.index_nprobe = args.probe
+                self.device = torch.device("cpu")  # keys are always numpy arrays for faiss
                 if self.use_gpu_index:
+                    self.use_half_prec = True
                     assert self.use_cuda, "GPU index assumes use_cuda is true"
                     assert self.device.type == "cuda", f"Assumed device to be cuda with GPU index enabled (found device: {self.device})"
                 print("!! Using GPU FAISS index?", self.use_gpu_index)
                 self.temporary_cache = {"k": [], "v": []}
+            else:
+                self.use_cuda = True
+                self.device = torch.device("cuda" if torch.cuda.is_available() and self.use_cuda else "cpu")
+                print("!! Keystore device:", self.device)
 
     def setup_faiss(self, args):
         print("!! Skipping FAISS setup for in-memory KNN DStore...")
         return  # don't do anything
 
-    def setup_vector_db(self, args):
+    def setup_vector_db(self):
         print("!! Setting up vector database for in-memory KNN DStore...")
         # https://milvus.io/docs/v2.0.x/example_code.md
         connections.connect(alias="default", host="localhost", port="19530")
@@ -238,7 +242,7 @@ class In_Memory_KNN_Dstore(KNN_Dstore):
             if self.use_temporary_cache:
                 self.temporary_cache["k"].append(k)
                 self.temporary_cache["v"].append(v)
-                print(f"!! New item added in temporary cache / temporary cache size: {len(self.temporary_cache['k'])} / keys in store: {self.keys.shape}")
+                print(f"!! New item added in temporary cache / temporary cache size: {len(self.temporary_cache['k'])} / keys in store: {self.keys.shape if self.keys is not None else 'none'}")
             else:
                 if self.keys is None:
                     assert self.values is None
@@ -249,28 +253,34 @@ class In_Memory_KNN_Dstore(KNN_Dstore):
                     self.values = torch.cat([self.values, v], dim=0)
                 print(f"!! New item added in memory store / k: {self.keys.shape} / v: {self.values.shape}")
 
-    def update_datastore(self, args, model_dim=1024):
+    def update_datastore(self, model_dim=1024):
         """Integrates items from temporary cache into the datastore and updates the index"""
         assert self.use_temporary_cache, "Build index assumes that temporary caching is enabled"
-        old_keys_shape = self.keys.shape
-        self.keys = torch.cat([self.keys] + self.temporary_cache['k'], dim=0)
-        self.values = torch.cat([self.values] + self.temporary_cache['v'], dim=0)
-        print(f"!! Cache elements integrated into datastore / previous keys shape: {old_keys_shape} / new keys shape: {self.keys.shape}")
+        if self.keys is not None:
+            old_keys_shape = self.keys.shape
+            self.keys = torch.cat([self.keys] + self.temporary_cache['k'], dim=0)
+            self.values = torch.cat([self.values] + self.temporary_cache['v'], dim=0)
+            print(f"!! Cache elements integrated into datastore / previous keys shape: {old_keys_shape} / new keys shape: {self.keys.shape}")
+        else:
+            self.keys = torch.cat(self.temporary_cache['k'], dim=0)
+            self.values = torch.cat(self.temporary_cache['v'], dim=0)
+            print(f"!! Cache elements integrated into datastore / previous keys shape: none / new keys shape: {self.keys.shape}")
 
-        self.update_index(args, model_dim)
+        # Update index
+        self.update_index(model_dim)
 
-    def update_index(self, args, model_dim=1024):
+    def update_index(self, model_dim=1024):
         # Supports FAISS-GPU index (https://github.com/facebookresearch/faiss/wiki/Faiss-on-the-GPU)
         # Rebuild the index
         print(f"!! Rebuilding {'GPU' if self.use_gpu_index else 'CPU'}-FAISS index")
         start = time.time()
         if self.use_gpu_index:
-            self.index = faiss.GpuIndexFlatL2(model_dim)   # build the index
+            self.index = faiss.GpuIndexFlatL2(model_dim)    # build the index
         else:
-            self.index = faiss.IndexFlatL2(model_dim)   # build the index
-        self.index.add(self.keys)                  # add vectors to the index
+            self.index = faiss.IndexFlatL2(model_dim)       # build the index
+        self.index.add(self.keys.cpu().numpy())             # add vectors to the index (always numpy arrays)
         print(f"!! Index creation took {time.time() - start} seconds")
-        self.index.nprobe = args.probe
+        self.index.nprobe = self.index_nprobe
 
     def get_knns(self, queries, use_batched_version=False):
         """Batched version is disabled by default as it is super expensive in terms of memory"""
@@ -300,7 +310,7 @@ class In_Memory_KNN_Dstore(KNN_Dstore):
             selected_vals = torch.tensor(selected_vals)
 
         elif self.use_temporary_cache:  # temporary caching creating a faiss index
-            selected_dists, nearest_neighbors = self.index.search(queries, self.k)
+            selected_dists, nearest_neighbors = self.index.search(queries.detach().cpu().numpy(), self.k)
             selected_vals = torch.stack([torch.gather(self.values[:, 0], dim=0, index=nearest_neighbors[i, :])
                                         for i in range(nearest_neighbors.shape[0])], dim=0)  # values are tensor of size [N' x 1]
 
