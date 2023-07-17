@@ -140,6 +140,7 @@ class In_Memory_KNN_Dstore(KNN_Dstore):
         self.index_update_steps = 5
         self.insertion_steps = 0  # counts the number of insertions to identify index update
         self.temporary_cache = None
+        self.use_gpu_index = None
         self.use_temporary_cache = True
         if self.use_vector_db:
             self.setup_vector_db(args)
@@ -147,8 +148,14 @@ class In_Memory_KNN_Dstore(KNN_Dstore):
             self.use_cuda = True
             torch.device("cuda" if torch.cuda.is_available() and self.use_cuda else "cpu")
             print("!! Keystore device:", self.device)
+
             if self.use_temporary_cache:
                 self.index = None
+                self.use_gpu_index = True
+                if self.use_gpu_index:
+                    assert self.use_cuda, "GPU index assumes use_cuda is true"
+                    assert self.device.type == "cuda", f"Assumed device to be cuda with GPU index enabled (found device: {self.device})"
+                print("!! Using GPU FAISS index?", self.use_gpu_index)
                 self.temporary_cache = {"k": [], "v": []}
 
     def setup_faiss(self, args):
@@ -253,11 +260,14 @@ class In_Memory_KNN_Dstore(KNN_Dstore):
         self.update_index(args, model_dim)
 
     def update_index(self, args, model_dim=1024):
-        # TODO: Integrate FAISS-GPU index
+        # Supports FAISS-GPU index (https://github.com/facebookresearch/faiss/wiki/Faiss-on-the-GPU)
         # Rebuild the index
-        print("!! Rebuilding FAISS index")
+        print(f"!! Rebuilding {'GPU' if self.use_gpu_index else 'CPU'}-FAISS index")
         start = time.time()
-        self.index = faiss.IndexFlatL2(model_dim)   # build the index
+        if self.use_gpu_index:
+            self.index = faiss.GpuIndexFlatL2(model_dim)   # build the index
+        else:
+            self.index = faiss.IndexFlatL2(model_dim)   # build the index
         self.index.add(self.keys)                  # add vectors to the index
         print(f"!! Index creation took {time.time() - start} seconds")
         self.index.nprobe = args.probe
