@@ -19,16 +19,14 @@ from fairseq import checkpoint_utils, options, progress_bar, tasks, utils
 from fairseq.data import LMContextWindowDataset
 from fairseq.meters import StopwatchMeter, TimeMeter
 from fairseq.sequence_scorer import SequenceScorer
-from fairseq.knnlm import KNN_Dstore
-from .eval_lm_adaptive import main_adaptive
-
+from fairseq.knnlm import In_Memory_KNN_Dstore
 
 logging.basicConfig(
     format='%(asctime)s | %(levelname)s | %(name)s | %(message)s',
     datefmt='%Y-%m-%d %H:%M:%S',
     level=logging.INFO,
 )
-logger = logging.getLogger('fairseq_cli.eval_lm')
+logger = logging.getLogger('fairseq_cli.eval_lm_adaptive')
 
 
 class WordStat(object):
@@ -57,7 +55,94 @@ class WordStat(object):
                                                self.next_word_prob, self.count - self.missing_next_words)
 
 
-def main(parsed_args):
+class InMemoryDataStore:
+    """
+    In memory variant of the datastore introduced in the kNN-LM paper (https://arxiv.org/abs/1911.00172).
+    It stores key-value pairs, and returns the log-probability of the next token leveraging both
+        the predicted next token probabilities from the LM (parametric memory) as well as the next
+        token probability from the nearest neighbors storted in the datastore (non-parametric memory).
+    """
+    def __init__(self, dist_metric) -> None:
+        self.k = None
+        self.v = None
+        assert dist_metric in ["l2", "squared_l2", "cosine"]
+        self.dist_metric = dist_metric
+    
+    def add_item_to_store(self, k: torch.Tensor, v: torch.Tensor) -> None:
+        assert len(k.shape) == len(v.shape), f"{k.shape} != {v.shape}"
+        if len(k.shape) == 1:
+            assert len(v.shape) == 1, v.shape
+            k = k.expand_dim(dim=0)
+            v = v.expand_dim(dim=0)
+
+        if isinstance(k, np.ndarray):
+            k = torch.from_numpy(k)
+        if isinstance(v, np.ndarray):
+            v = torch.from_numpy(v)
+
+        if self.dist_metric == "cosine":
+            k = torch.nn.functional.normalize(k, p=2.0, dim=1)  # l2 normalize the key
+        if self.k is None:
+            assert self.v is None
+            self.k = k
+            self.v = v
+        else:
+            self.k = torch.cat([self.k, k], dim=0)
+            self.v = torch.cat([self.v, v], dim=0)
+        print(f"!! New item added in memory store / k: {self.k.shape} / v: {self.v.shape}")
+
+    def get_knn_log_prob(self, q: torch.Tensor, lm_log_probs: torch.Tensor,
+                         num_nn: int=1024) -> torch.Tensor:
+        if len(q.shape) == 1:
+            q = q.expand_dim(dim=0)
+
+        log_prob_vector = torch.zeros_like(lm_log_probs)
+        if self.k is not None:  # zero probability for every token otherwise
+            # self.k shape: B x D
+            if self.dist_metric in ["l2", "squared_l2"]:
+                dist = ((self.k - q) ** 2).sum(dim=1)
+                if self.dist_metric == "l2":
+                    dist = torch.sqrt(dist)
+            elif self.dist_metric == "cosine":
+                q = torch.nn.functional.normalize(q, p=2.0, dim=1)  # l2 normalize the query
+                sim = torch.matmul(q, self.k.T)  # (1 x D) x (N x D).T -> 1 x N
+                dist = 1.0 - sim  # cosine distance
+            else:
+                raise RuntimeError(f"Unknown distance metric: {self.dist_metric}")
+
+            # Compute nearest neighbors based on the distance
+            dist_idx_sorted = torch.argsort(dist, dim=1, descending=False)
+            nearest_neighbors = dist_idx_sorted[:, :num_nn]
+
+            # Select the nearest neighbors
+            selected_dists = torch.gather(dist, dim=1, index=nearest_neighbors)
+            selected_vals = torch.gather(self.v, dim=1, index=nearest_neighbors)
+
+            # Compute the normalized log-probs (probability is proportional to the negative distance)
+            normalized_log_prob = torch.nn.functional.log_softmax(-selected_dists, dim=-1)
+
+            # Compute aggregation of probabilities for the same word
+            for idx in range(normalized_log_prob.shape[1]):
+                log_prob_vector.scatter_add_(dim=1, index=selected_vals[:, idx:idx+1], src=normalized_log_prob[:, idx:idx+1])
+
+        # return the final prob vector
+        return log_prob_vector
+
+    def get_knn_lm_log_prob(self, lm_log_probs: torch.Tensor, lm_features: torch.Tensor,
+                            lambda_val: float, num_nn: int=1024) -> torch.Tensor:
+        # Get the log probs from the kNN
+        knn_log_probs = self.get_knn_log_prob(lm_features, lm_log_probs, num_nn=num_nn)
+
+        # LogSumExp is used since the two probabities are added, which necessitates exponentiation due to log_probs
+        combined_log_probs = torch.logsumexp(torch.stack([lm_log_probs + torch.log(1. - lambda_val),
+                                                          knn_log_probs + torch.log(lambda_val)]), dim=0)
+        return combined_log_probs
+
+    def print_datastore_stats(self) -> None:
+        print(f"Datastore stats / Keys: {self.k.shape} / Values: {self.v.shape} / Distance metric: {self.dist_metric}")
+
+
+def main_adaptive(parsed_args):
     assert parsed_args.path is not None, '--path required for evaluation!'
 
     utils.import_user_module(parsed_args)
@@ -84,6 +169,7 @@ def main(parsed_args):
             setattr(args, arg, getattr(parsed_args, arg))
 
     # reduce tokens per sample by the required context window size
+    assert args.use_adaptive_mem, "This script exclusively implements the adaptive memory"
     args.tokens_per_sample -= args.context_window
     task = tasks.setup_task(args)
 
@@ -147,27 +233,11 @@ def main(parsed_args):
 
     word_stats = dict()
 
-    if args.knnlm and args.save_knnlm_dstore:
-        raise ValueError("Cannot use knnlm while trying to build the datastore!")
-
-    if args.knnlm:
-        knn_dstore = KNN_Dstore(args)
+    # knn_dstore = InMemoryDataStore(dist_metric="squared_l2")
+    knn_dstore = In_Memory_KNN_Dstore(args)
 
     with progress_bar.build_progress_bar(args, itr) as t:
         wps_meter = TimeMeter()
-
-        if args.save_knnlm_dstore:
-            print('keytype being saved:', args.knn_keytype)
-            if args.dstore_fp16:
-                print('Saving fp16')
-                dstore_keys = np.memmap(args.dstore_mmap+'_keys.npy', dtype=np.float16, mode='w+', shape=(args.dstore_size, args.decoder_embed_dim))
-                dstore_vals = np.memmap(args.dstore_mmap+'_vals.npy', dtype=np.int16, mode='w+', shape=(args.dstore_size, 1))
-            else:
-                print('Saving fp32')
-                dstore_keys = np.memmap(args.dstore_mmap+'_keys.npy', dtype=np.float32, mode='w+', shape=(args.dstore_size, args.decoder_embed_dim))
-                dstore_vals = np.memmap(args.dstore_mmap+'_vals.npy', dtype=np.int32, mode='w+', shape=(args.dstore_size, 1))
-
-        dstore_idx = 0
         for ex_i, sample in enumerate(t):
             if 'net_input' not in sample:
                 continue
@@ -175,10 +245,7 @@ def main(parsed_args):
             sample = utils.move_to_cuda(sample) if use_cuda else sample
 
             gen_timer.start()
-            if args.knnlm:
-                hypos = scorer.generate(models, sample, knn_dstore=knn_dstore)
-            else:
-                hypos = scorer.generate(models, sample)
+            hypos = scorer.generate(models, sample, knn_dstore=knn_dstore)
             gen_timer.stop(sample['ntokens'])
 
             key_dtype = np.float16 if args.dstore_fp16 else np.float32
@@ -186,24 +253,13 @@ def main(parsed_args):
 
             for i, hypos_i in enumerate(hypos):
                 hypo = hypos_i[0]
-                if args.save_knnlm_dstore:
-                    shape = hypo['dstore_keys'].shape
-                    if shape[0] == args.tokens_per_sample:
-                        if args.use_adaptive_mem:
-                            raise NotImplementedError
-                            # TODO: Decide based on log-prob whether this sequence needs to be stored or not
-                            # TODO: One very important detail -- the log prob should take into account the previously generated memory -- continuous updates
-
-                        if dstore_idx + shape[0] > args.dstore_size:
-                            shape = [args.dstore_size - dstore_idx]
-                            hypo['dstore_keys'] = hypo['dstore_keys'][:shape[0]]
-
-                        dstore_keys[dstore_idx:shape[0]+dstore_idx] = hypo['dstore_keys'].view(-1, args.decoder_embed_dim).cpu().numpy().astype(key_dtype)
-                        dstore_vals[dstore_idx:shape[0]+dstore_idx] = hypo['tokens'].view(-1, 1).cpu().numpy().astype(val_dtype)
-
-                        dstore_idx += shape[0]
-                    else:
-                        print('Skipping this one with shape', shape)
+                shape = hypo['dstore_keys'].shape
+                if shape[0] == args.tokens_per_sample:
+                    key = hypo['dstore_keys'].view(-1, args.decoder_embed_dim).cpu().numpy().astype(key_dtype)
+                    val = hypo['tokens'].view(-1, 1).cpu().numpy().astype(val_dtype)
+                    knn_dstore.add_item_to_store(key, val)
+                else:
+                    print('Skipping this one with shape', shape)
 
                 sample_id = sample['id'][i]
 
@@ -260,14 +316,12 @@ def main(parsed_args):
             wps_meter.update(sample['ntokens'])
             t.log({'wps': round(wps_meter.avg)})
 
-    if args.save_knnlm_dstore:
-        print("dstore_idx", dstore_idx, "final shape", shape)
-        print("Keys", dstore_keys.shape, dstore_keys.dtype)
-        print("Vals", dstore_vals.shape, dstore_vals.dtype)
+            # TODO: remove it (only for testing)
+            update_iter = 10
+            if ex_i % update_iter == update_iter - 1:
+                knn_dstore.update_datastore()
 
-    if args.use_adaptive_mem:
-        raise NotImplementedError
-        # TODO: Copy the data from this large maximum size memmap to a smaller memmap
+    knn_dstore.print_datastore_stats()
 
     avg_nll_loss = -score_sum / count / math.log(2)  # convert to base 2
     logger.info('Evaluated {} tokens in {:.1f}s ({:.2f} tokens/s)'.format(
@@ -280,18 +334,3 @@ def main(parsed_args):
     if args.output_word_stats:
         for ws in sorted(word_stats.values(), key=lambda x: x.count, reverse=True):
             logger.info(ws)
-
-
-def cli_main():
-    parser = options.get_eval_lm_parser()
-    args = options.parse_args_and_arch(parser)
-    if args.use_adaptive_mem:
-        print("!! Using adaptive main function...")
-        main_adaptive(args)
-    else:
-        print("!! Using normal main function...")
-        main(args)
-
-
-if __name__ == '__main__':
-    cli_main()
