@@ -2,6 +2,7 @@
 
 import os
 import random
+import natsort
 from datasets import load_dataset, concatenate_datasets, DatasetDict
 
 
@@ -18,9 +19,6 @@ def add_day(example):
 dataset_name = "cc_news"
 dataset = load_dataset(dataset_name)["train"]  # there is no other split
 
-# Sort the dataset
-dataset = dataset.sort("date")
-
 # Remove all elements without any date
 dataset = dataset.filter(filter_without_date)
 
@@ -28,7 +26,8 @@ dataset = dataset.filter(filter_without_date)
 dataset = dataset.map(add_day)
 
 # Unique days
-unique_days = list(set(dataset['day']))
+unique_days = natsort.natsorted(list(set(dataset['day'])))
+print("Unique days:", unique_days[:5])
 
 train_datasets = []
 test_datasets = []
@@ -37,6 +36,16 @@ valid_datasets = []
 # Split data for each day and append to respective datasets
 for day in unique_days:
     day_data = dataset.filter(lambda x: x['day'] == day)
+    print(f"Date: {day} / records: {len(day_data)}")
+    if len(day_data) == 1:
+        prob = random.random()
+        if prob < 0.33:
+            train_datasets.append(day_data)
+        elif prob > 0.66:
+            test_datasets.append(day_data)
+        else:
+            valid_datasets.append(day_data)
+
     train_testvalid = day_data.train_test_split(test_size=0.02)              # 98% train, (1% validation + 1% test)
     train_datasets.append(train_testvalid['train'])
 
