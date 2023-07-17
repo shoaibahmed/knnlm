@@ -311,6 +311,8 @@ class In_Memory_KNN_Dstore(KNN_Dstore):
 
         elif self.use_temporary_cache:  # temporary caching creating a faiss index
             selected_dists, nearest_neighbors = self.index.search(queries.detach().cpu().numpy(), self.k)
+            nearest_neighbors = torch.from_numpy(nearest_neighbors).to(self.device)
+            selected_dists = torch.from_numpy(selected_dists).to(self.device)
             selected_vals = torch.stack([torch.gather(self.values[:, 0], dim=0, index=nearest_neighbors[i, :])
                                         for i in range(nearest_neighbors.shape[0])], dim=0)  # values are tensor of size [N' x 1]
 
