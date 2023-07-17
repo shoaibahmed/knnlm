@@ -316,6 +316,11 @@ def main_adaptive(parsed_args):
             wps_meter.update(sample['ntokens'])
             t.log({'wps': round(wps_meter.avg)})
 
+            # TODO: remove it (only for testing)
+            update_iter = 10
+            if ex_i % update_iter == update_iter - 1:
+                knn_dstore.update_datastore()
+
     knn_dstore.print_datastore_stats()
 
     avg_nll_loss = -score_sum / count / math.log(2)  # convert to base 2
