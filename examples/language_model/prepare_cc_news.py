@@ -1,22 +1,65 @@
 #!/bin/python
 
 import os
-import natsort
-from datasets import load_dataset, DatasetDict
+import random
+from datasets import load_dataset, concatenate_datasets, DatasetDict
+
+
+def filter_without_date(example):
+    return example['date'] != ''
+
+
+def add_day(example):
+    example['day'] = example['date'].split()[0]  # assuming date format is 'yyyy-mm-dd hh:mm:ss'
+    return example
 
 
 # Download the dataset
 dataset_name = "cc_news"
-dataset = load_dataset(dataset_name)
+dataset = load_dataset(dataset_name)["train"]  # there is no other split
 
-# Split the dataset into train, val and test
-train_testvalid = dataset['train'].train_test_split(test_size=0.1)              # 90% train, 10% test + validation
-test_valid = train_testvalid['test'].train_test_split(test_size=0.5)            # Split the 10% test + valid in half test, half valid
+# Sort the dataset
+dataset = dataset.sort("date")
+
+# Remove all elements without any date
+dataset = dataset.filter(filter_without_date)
+
+# Add 'day' column
+dataset = dataset.map(add_day)
+
+# Unique days
+unique_days = list(set(dataset['day']))
+
+train_datasets = []
+test_datasets = []
+valid_datasets = []
+
+# Split data for each day and append to respective datasets
+for day in unique_days:
+    day_data = dataset.filter(lambda x: x['day'] == day)
+    train_testvalid = day_data.train_test_split(test_size=0.02)              # 98% train, (1% validation + 1% test)
+    train_datasets.append(train_testvalid['train'])
+
+    if len(train_testvalid['test']) == 1:  # assign the example randomly to either validation or test
+        assign_to_test = random.random() >= 0.5
+        if assign_to_test:
+            test_datasets.append(train_testvalid['test'])
+        else:
+            valid_datasets.append(train_testvalid['test'])
+    elif len(train_testvalid['test']) > 1:
+        test_valid = train_testvalid['test'].train_test_split(test_size=0.5)     # Split the 2% (validation + test) in half test, half valid
+        test_datasets.append(test_valid['test'])
+        valid_datasets.append(test_valid['train'])
+
+# Concatenating all splits
+train_dataset = concatenate_datasets(train_datasets)
+test_dataset = concatenate_datasets(test_datasets)
+valid_dataset = concatenate_datasets(valid_datasets)
 
 train_test_valid_dataset = DatasetDict({
-    'train': train_testvalid['train'],
-    'valid': test_valid['train'],
-    'test': test_valid['test'],
+    'train': train_dataset,
+    'valid': valid_dataset,
+    'test': test_dataset,
 })
 print(train_test_valid_dataset)
 
@@ -29,5 +72,5 @@ if not os.path.exists(output_dir):
 for split in ["train", "valid", "test"]:
     with open(os.path.join(output_dir, f"{split}.tokens"), "w") as f:
         for ex_idx, example in enumerate(train_test_valid_dataset[split]):
-            f.write(f"= {example['title']} =\n\n")
+            f.write(f"= {example['title']} ({example['date']}) =\n\n")
             f.write(f"{example['text']}\n\n\n")
