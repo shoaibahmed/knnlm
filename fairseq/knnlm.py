@@ -268,6 +268,9 @@ class In_Memory_KNN_Dstore(KNN_Dstore):
             self.values = torch.cat(self.temporary_cache['v'], dim=0)
             print(f"!! Cache elements integrated into datastore / previous keys shape: none / new keys shape: {self.keys.shape}")
 
+        # Reset temporary cache
+        self.temporary_cache = {"k": [], "v": []}
+
         # Update index
         self.update_index(model_dim)
 
