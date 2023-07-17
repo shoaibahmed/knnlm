@@ -3,6 +3,8 @@
 import os
 import random
 import natsort
+
+import numpy as np
 from datasets import load_dataset, concatenate_datasets, DatasetDict
 
 
@@ -34,8 +36,15 @@ test_datasets = []
 valid_datasets = []
 
 # Split data for each day and append to respective datasets
+day_np_arr = np.array(list(dataset['day']))
+use_filter = False
 for day in unique_days:
-    day_data = dataset.filter(lambda x: x['day'] == day)
+    if use_filter:
+        day_data = dataset.filter(lambda x: x['day'] == day)
+    else:
+        selected_idx = np.where(day_np_arr == day)[0]
+        day_data = dataset.select(selected_idx)
+
     print(f"Date: {day} / records: {len(day_data)}")
     if len(day_data) == 1:
         prob = random.random()
@@ -45,6 +54,7 @@ for day in unique_days:
             test_datasets.append(day_data)
         else:
             valid_datasets.append(day_data)
+        continue
 
     train_testvalid = day_data.train_test_split(test_size=0.02)              # 98% train, (1% validation + 1% test)
     train_datasets.append(train_testvalid['train'])
