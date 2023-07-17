@@ -134,15 +134,22 @@ class In_Memory_KNN_Dstore(KNN_Dstore):
         self.values = None
         self.dist_metric = "squared_l2"
         self.use_vector_db = False
-        self.use_cuda = True
-        self.device = torch.device("cuda" if torch.cuda.is_available() and self.use_cuda else "cpu")
+        self.device = None
         self.use_half_prec = True
         self.iterator = 0  # counts the number of items
         self.index_update_steps = 5
         self.insertion_steps = 0  # counts the number of insertions to identify index update
-        print("!! Vector database device:", self.device)
+        self.temporary_cache = None
+        self.use_temporary_cache = True
         if self.use_vector_db:
             self.setup_vector_db(args)
+        else:
+            self.use_cuda = True
+            torch.device("cuda" if torch.cuda.is_available() and self.use_cuda else "cpu")
+            print("!! Keystore device:", self.device)
+            if self.use_temporary_cache:
+                self.index = None
+                self.temporary_cache = {"k": [], "v": []}
 
     def setup_faiss(self, args):
         print("!! Skipping FAISS setup for in-memory KNN DStore...")
@@ -221,16 +228,42 @@ class In_Memory_KNN_Dstore(KNN_Dstore):
             if self.dist_metric == "cosine":
                 k = torch.nn.functional.normalize(k, p=2.0, dim=1)  # l2 normalize the key
 
-            if self.keys is None:
-                assert self.values is None
-                self.keys = k
-                self.values = v
+            if self.use_temporary_cache:
+                self.temporary_cache["k"].append(k)
+                self.temporary_cache["v"].append(v)
+                print(f"!! New item added in temporary cache / temporary cache size: {len(self.temporary_cache['k'])} / keys in store: {self.keys.shape}")
             else:
-                self.keys = torch.cat([self.keys, k], dim=0)
-                self.values = torch.cat([self.values, v], dim=0)
-            print(f"!! New item added in memory store / k: {self.keys.shape} / v: {self.values.shape}")
+                if self.keys is None:
+                    assert self.values is None
+                    self.keys = k
+                    self.values = v
+                else:
+                    self.keys = torch.cat([self.keys, k], dim=0)
+                    self.values = torch.cat([self.values, v], dim=0)
+                print(f"!! New item added in memory store / k: {self.keys.shape} / v: {self.values.shape}")
 
-    def get_knns(self, queries):
+    def update_datastore(self, args, model_dim=1024):
+        """Integrates items from temporary cache into the datastore and updates the index"""
+        assert self.use_temporary_cache, "Build index assumes that temporary caching is enabled"
+        old_keys_shape = self.keys.shape
+        self.keys = torch.cat([self.keys] + self.temporary_cache['k'], dim=0)
+        self.values = torch.cat([self.values] + self.temporary_cache['v'], dim=0)
+        print(f"!! Cache elements integrated into datastore / previous keys shape: {old_keys_shape} / new keys shape: {self.keys.shape}")
+
+        self.update_index(args, model_dim)
+
+    def update_index(self, args, model_dim=1024):
+        # TODO: Integrate FAISS-GPU index
+        # Rebuild the index
+        print("!! Rebuilding FAISS index")
+        start = time.time()
+        self.index = faiss.IndexFlatL2(model_dim)   # build the index
+        self.index.add(self.keys)                  # add vectors to the index
+        print(f"!! Index creation took {time.time() - start} seconds")
+        self.index.nprobe = args.probe
+
+    def get_knns(self, queries, use_batched_version=False):
+        """Batched version is disabled by default as it is super expensive in terms of memory"""
         assert len(queries.shape) == 2, queries.shape
         if self.use_half_prec:
             queries = queries.half()  # only keys are in half precision
@@ -255,30 +288,42 @@ class In_Memory_KNN_Dstore(KNN_Dstore):
                     # print(f"hit: {hit}, random field: {hit.entity.get('next_token')}")
             selected_dists = torch.tensor(selected_dists)
             selected_vals = torch.tensor(selected_vals)
-            return selected_dists, selected_vals
 
-        # self.keys shape: B x D
-        queries = queries.detach().to(self.device)
-        if self.dist_metric in ["l2", "squared_l2"]:
-            dist = ((queries[:, None, :] - self.keys[None, :, :]) ** 2).sum(dim=2)  # (N' x 1, D) - (1 x N x D).T -> N' x N x D -> N' x N
-            if self.dist_metric == "l2":
-                dist = torch.sqrt(dist)
-        elif self.dist_metric == "cosine":
-            queries = torch.nn.functional.normalize(queries, p=2.0, dim=1)  # l2 normalize the query
-            sim = torch.matmul(queries, self.keys.T)  # (N' x D) x (N x D).T -> N' x N
-            dist = 1.0 - sim  # cosine distance
+        elif self.use_temporary_cache:  # temporary caching creating a faiss index
+            selected_dists, nearest_neighbors = self.index.search(queries, self.k)
+            selected_vals = torch.stack([torch.gather(self.values[:, 0], dim=0, index=nearest_neighbors[i, :])
+                                        for i in range(nearest_neighbors.shape[0])], dim=0)  # values are tensor of size [N' x 1]
+
         else:
-            raise RuntimeError(f"Unknown distance metric: {self.dist_metric}")
+            # self.keys shape: B x D
+            queries = queries.detach().to(self.device)
+            if self.dist_metric in ["l2", "squared_l2"]:
+                if use_batched_version:
+                    dist = ((queries[:, None, :] - self.keys[None, :, :]) ** 2).sum(dim=2)  # (N' x 1, D) - (1 x N x D).T -> N' x N x D -> N' x N
+                else:
+                    dist = torch.stack([((queries[i:i+1, :] - self.keys) ** 2).sum(dim=1) for i in range(len(queries))], dim=0)
+                assert dist.shape == (len(queries), len(self.keys)), dist.shape
+                if self.dist_metric == "l2":
+                    dist = torch.sqrt(dist)
+            elif self.dist_metric == "cosine":
+                queries = torch.nn.functional.normalize(queries, p=2.0, dim=1)  # l2 normalize the query
+                if use_batched_version:
+                    sim = torch.matmul(queries, self.keys.T)  # (N' x D) x (N x D).T -> N' x N
+                else:
+                    sim = torch.cat([torch.matmul(queries[i:i+1, :], self.keys.T) for i in range(len(queries))], dim=0)  # (1 x D) x (N x D).T -> [1 x N]
+                assert sim.shape == (len(queries), len(self.keys)), sim.shape
+                dist = 1.0 - sim  # cosine distance
+            else:
+                raise RuntimeError(f"Unknown distance metric: {self.dist_metric}")
 
-        # Compute nearest neighbors based on the distance
-        dist_idx_sorted = torch.argsort(dist, dim=1, descending=False)
-        nearest_neighbors = dist_idx_sorted[:, :self.k]  # as distances are sorted in ascending order
+            # Compute nearest neighbors based on the distance
+            dist_idx_sorted = torch.argsort(dist, dim=1, descending=False)
+            nearest_neighbors = dist_idx_sorted[:, :self.k]  # as distances are sorted in ascending order
 
-        # Select the nearest neighbors
-        selected_dists = torch.gather(dist, dim=1, index=nearest_neighbors)
-        # selected_vals = torch.gather(self.values, dim=1, index=nearest_neighbors)
-        selected_vals = torch.stack([torch.gather(self.values[:, 0], dim=0, index=nearest_neighbors[i, :])
-                                     for i in range(nearest_neighbors.shape[0])], dim=0)  # values are tensor of size [N' x 1]
+            # Select the nearest neighbors
+            selected_dists = torch.gather(dist, dim=1, index=nearest_neighbors)
+            selected_vals = torch.stack([torch.gather(self.values[:, 0], dim=0, index=nearest_neighbors[i, :])
+                                        for i in range(nearest_neighbors.shape[0])], dim=0)  # values are tensor of size [N' x 1]
 
         return selected_dists, selected_vals
 
