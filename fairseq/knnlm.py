@@ -146,21 +146,21 @@ class In_Memory_KNN_Dstore(KNN_Dstore):
         if self.use_vector_db:
             self.setup_vector_db()
         else:
+            self.use_cuda = False
             if self.use_temporary_cache:
+                self.use_half_prec = False  # encountors an error on add elements to index when turned on
                 self.index = None
-                self.use_gpu_index = False
                 self.index_nprobe = args.probe
-                self.device = torch.device("cpu")  # keys are always numpy arrays for faiss
+                self.use_gpu_index = True
+                self.use_tensors_for_faiss = False  # Latest FAISS version will directly support PyTorch tensors
                 if self.use_gpu_index:
-                    self.use_half_prec = True
-                    assert self.use_cuda, "GPU index assumes use_cuda is true"
-                    assert self.device.type == "cuda", f"Assumed device to be cuda with GPU index enabled (found device: {self.device})"
+                    self.use_cuda = self.use_tensors_for_faiss
                 print("!! Using GPU FAISS index?", self.use_gpu_index)
                 self.temporary_cache = {"k": [], "v": []}
             else:
                 self.use_cuda = True
-                self.device = torch.device("cuda" if torch.cuda.is_available() and self.use_cuda else "cpu")
-                print("!! Keystore device:", self.device)
+            self.device = torch.device("cuda" if torch.cuda.is_available() and self.use_cuda else "cpu")
+            print("!! Keystore device:", self.device)
 
     def setup_faiss(self, args):
         print("!! Skipping FAISS setup for in-memory KNN DStore...")
@@ -198,6 +198,8 @@ class In_Memory_KNN_Dstore(KNN_Dstore):
 
         if self.use_half_prec:
             k = k.half()  # only keys are required to be converted
+        else:
+            k = k.to(torch.float32)  # avoid double precision
 
         if self.use_vector_db:
             b = len(k)
@@ -269,24 +271,37 @@ class In_Memory_KNN_Dstore(KNN_Dstore):
         # Update index
         self.update_index(model_dim)
 
-    def update_index(self, model_dim=1024):
+    def update_index(self, model_dim=1024, use_ivf=False):
         # Supports FAISS-GPU index (https://github.com/facebookresearch/faiss/wiki/Faiss-on-the-GPU)
         # Rebuild the index
         print(f"!! Rebuilding {'GPU' if self.use_gpu_index else 'CPU'}-FAISS index")
         start = time.time()
+        keys = self.keys if self.use_tensors_for_faiss else self.keys.cpu().numpy()  # cast to numpy for faiss
+
         if self.use_gpu_index:
-            self.index = faiss.GpuIndexFlatL2(model_dim)    # build the index
+            # https://github.com/facebookresearch/faiss/blob/main/faiss/gpu/test/torch_test_contrib_gpu.py
+            res = faiss.StandardGpuResources()
+            self.index = faiss.GpuIndexFlatL2(res, model_dim)    # build the index
         else:
             self.index = faiss.IndexFlatL2(model_dim)       # build the index
-        self.index.add(self.keys.cpu().numpy())             # add vectors to the index (always numpy arrays)
+
+        if use_ivf:
+            print("!! Training IVF index")
+            nlist = 128  # the number of cells
+            self.index = faiss.IndexIVFFlat(self.index, model_dim, nlist)
+            self.index.train(keys)  # train IVF index
+
+        self.index.add(keys)  # add elements to index
         print(f"!! Index creation took {time.time() - start} seconds")
-        self.index.nprobe = self.index_nprobe
+        self.index.nprobe = self.index_nprobe  # nprobe is the number of cells (out of nlist) that are visited to perform a search
 
     def get_knns(self, queries, use_batched_version=False):
         """Batched version is disabled by default as it is super expensive in terms of memory"""
         assert len(queries.shape) == 2, queries.shape
         if self.use_half_prec:
             queries = queries.half()  # only keys are in half precision
+        else:
+            queries = queries.to(torch.float32)  # avoid double precision
 
         if self.use_vector_db:
             # Search the vector store
@@ -310,7 +325,9 @@ class In_Memory_KNN_Dstore(KNN_Dstore):
             selected_vals = torch.tensor(selected_vals)
 
         elif self.use_temporary_cache:  # temporary caching creating a faiss index
-            selected_dists, nearest_neighbors = self.index.search(queries.detach().cpu().numpy(), self.k)
+            if not self.use_tensors_for_faiss:
+                queries = queries.detach().cpu().numpy()  # convert to numpy arrays
+            selected_dists, nearest_neighbors = self.index.search(queries, self.k)
             nearest_neighbors = torch.from_numpy(nearest_neighbors).to(self.device)
             selected_dists = torch.from_numpy(selected_dists).to(self.device)
             selected_vals = torch.stack([torch.gather(self.values[:, 0], dim=0, index=nearest_neighbors[i, :])
