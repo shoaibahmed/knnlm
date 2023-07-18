@@ -73,6 +73,23 @@ python preprocess.py \
     --workers 8
 ```
 
+For CC-News dataset:
+
+```bash
+cd examples/language_model/
+python prepare-cc-news.py
+cd ../..
+
+TEXT=examples/language_model/cc_news_tokenized
+python preprocess.py \
+    --only-source \
+    --trainpref $TEXT/cc_news.train.tokens \
+    --validpref $TEXT/cc_news.valid.tokens \
+    --testpref $TEXT/cc_news.test.tokens \
+    --destdir data-bin/cc-news/ \
+    --workers 8
+```
+
 ### Training the Language Model
 
 We share Fairseq's instructions on how to train the language model here. Alternatively, you can download the checkpoint used for our experiments [here](https://nlp.stanford.edu/projects/knnlm/wt103_checkpoint_best.pt).

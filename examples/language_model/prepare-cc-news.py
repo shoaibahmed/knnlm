@@ -96,7 +96,7 @@ if not os.path.exists(output_dir):
     print("Output directory created:", output_dir)
 
 for split in ["train", "valid", "test"]:
-    with open(os.path.join(output_dir, f"{split}.tokens"), "w") as f:
+    with open(os.path.join(output_dir, f"cc_news.{split}.tokens"), "w") as f:
         for ex_idx, example in enumerate(train_test_valid_dataset[split]):
             f.write(f"= {example['title']} ({example['date']}) =\n\n")
             f.write(f"{example['text']}\n\n\n")
