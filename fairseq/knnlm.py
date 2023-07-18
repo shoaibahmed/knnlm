@@ -255,10 +255,20 @@ class In_Memory_KNN_Dstore(KNN_Dstore):
                     self.values = torch.cat([self.values, v], dim=0)
                 print(f"!! New item added in memory store / k: {self.keys.shape} / v: {self.values.shape}")
 
+    def clear_weak_memories(self, weak_memory_threshold=0.1):
+        raise NotImplementedError
+
+    def update_memory_strengths(self, decay_factor=0.01):  # Knocks off a memory if not used for 90 updates
+        raise NotImplementedError
+        self.memory_strengths -= decay_factor
+
     def update_datastore(self, model_dim=1024):
         """Integrates items from temporary cache into the datastore and updates the index"""
         assert self.use_temporary_cache, "Build index assumes that temporary caching is enabled"
         if self.keys is not None:
+            # TODO: clear weak memories
+            # self.clear_weak_memories()
+
             old_keys_shape = self.keys.shape
             self.keys = torch.cat([self.keys] + self.temporary_cache['k'], dim=0)
             self.values = torch.cat([self.values] + self.temporary_cache['v'], dim=0)
@@ -374,7 +384,7 @@ class In_Memory_KNN_Dstore(KNN_Dstore):
             # queries  are TxBxC
             # reshape: (TxB)xC
             qshape = queries.shape
-            if self.keys is None or self.iterator == 0:  # iterator takes care of the vector db
+            if self.keys is None and self.iterator == 0:  # iterator takes care of the vector db
                 full_yhat_knn_prob = torch.zeros((qshape[0], qshape[1], 1), dtype=torch.float32).cuda()
                 return full_yhat_knn_prob
 
@@ -382,6 +392,7 @@ class In_Memory_KNN_Dstore(KNN_Dstore):
             queries = queries.view(-1, qshape[-1])
             tgt = tgt.contiguous().view(-1)
             dists, vals = self.get_knns(queries[tgt != pad_idx])
+
             # (T_reducedxB)xK
             dists = dists.cuda()
             probs = utils.log_softmax(-dists, dim=-1)

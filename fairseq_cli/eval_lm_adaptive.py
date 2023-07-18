@@ -317,9 +317,15 @@ def main_adaptive(parsed_args):
             t.log({'wps': round(wps_meter.avg)})
 
             # TODO: remove it (only for testing)
-            update_iter = 10
+            update_iter = 1
             if ex_i % update_iter == update_iter - 1:
+                new_hypos = scorer.generate(models, sample, knn_dstore=knn_dstore)
+                print(f"Scores before update: {[x[0]['score'] for x in hypos]}")
                 knn_dstore.update_datastore()
+
+                new_hypos = scorer.generate(models, sample, knn_dstore=knn_dstore)
+                print(f"Scores after update: {[x[0]['score'] for x in new_hypos]}")
+                exit()
 
     knn_dstore.print_datastore_stats()
 
