@@ -38,12 +38,19 @@ valid_datasets = []
 # Split data for each day and append to respective datasets
 day_np_arr = np.array(list(dataset['day']))
 use_filter = False
+max_articles_per_day = 250
 for day in unique_days:
     if use_filter:
         day_data = dataset.filter(lambda x: x['day'] == day)
     else:
         selected_idx = np.where(day_np_arr == day)[0]
         day_data = dataset.select(selected_idx)
+
+    if max_articles_per_day > 0 and len(day_data) > max_articles_per_day:
+        random_idx = np.random.choice(np.arange(len(day_data)), size=(max_articles_per_day,), replace=False)
+        prev_size = len(day_data)
+        day_data = day_data.select(random_idx)
+        print(f"! Chopping down {prev_size} to {len(day_data)}")
 
     print(f"Date: {day} / records: {len(day_data)}")
     if len(day_data) == 1:
