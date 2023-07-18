@@ -142,6 +142,16 @@ python eval_lm.py data-bin/wikitext-2 \
     --gen-subset valid
 ```
 
+For cc-news (using wikitext-103 pretrained checkpoint):
+
+```bash
+python eval_lm.py data-bin/cc-news \
+    --path checkpoints/checkpoint_best.pt \
+    --sample-break-mode complete --max-tokens 3072 \
+    --context-window 2560 --softmax-batch 1024 \
+    --gen-subset valid
+```
+
 ### Saving the keys and values for the datastore
 
 In order to save keys and values for the datastore, we must run model evaluation over the entire training set. 
@@ -173,7 +183,8 @@ python eval_lm.py data-bin/wikitext-103 \
     --context-window 1536 --tokens-per-sample 1536 \
     --dstore-mmap checkpoints/dstore_adaptive --knn-keytype 'last_ffn_input' \
     --use-adaptive-mem --model-overrides "{'knn_keytype': 'last_ffn_input'}" \
-    --save-knnlm-dstore --fp16
+    --save-knnlm-dstore --k 1024 --lmbda 0.25 --dstore-size 103225485 \
+    --probe 32 --knnlm --fp16
 ```
 
 For Wikitext-2, the total number of tokens in the training set is `2088628`. The dstore size `2087092` is `1536` tokens less than the total due to the context-window. We want each key to be constructed using a minimum amount of prior context.
