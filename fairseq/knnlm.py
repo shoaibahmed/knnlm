@@ -374,23 +374,26 @@ class In_Memory_KNN_Dstore(KNN_Dstore):
             # queries  are TxBxC
             # reshape: (TxB)xC
             qshape = queries.shape
+            if self.keys is None or self.iterator == 0:  # iterator takes care of the vector db
+                full_yhat_knn_prob = torch.zeros((qshape[0], qshape[1], 1), dtype=torch.float32).cuda()
+                return full_yhat_knn_prob
+
             full_yhat_knn_prob = torch.full([qshape[0]*qshape[1]], -10000, dtype=torch.float32).cuda()
+            queries = queries.view(-1, qshape[-1])
+            tgt = tgt.contiguous().view(-1)
+            dists, vals = self.get_knns(queries[tgt != pad_idx])
+            # (T_reducedxB)xK
+            dists = dists.cuda()
+            probs = utils.log_softmax(-dists, dim=-1)
 
-            if self.keys is not None or self.iterator > 0:  # iterator takes care of the vector db
-                queries = queries.view(-1, qshape[-1])
-                tgt = tgt.contiguous().view(-1)
-                dists, vals = self.get_knns(queries[tgt != pad_idx])
-                # (T_reducedxB)xK
-                dists = dists.cuda()
-                probs = utils.log_softmax(-dists, dim=-1)
+            # We already know the target that we would like to predict -- probability only contributes to target label
+            index_mask = torch.eq(vals.long().cuda().squeeze(-1), tgt[tgt != pad_idx].unsqueeze(-1)).float()
+            index_mask[index_mask == 0] = -10000 # for stability
+            index_mask[index_mask == 1] = 0
 
-                index_mask = torch.eq(vals.long().cuda().squeeze(-1), tgt[tgt != pad_idx].unsqueeze(-1)).float()
-                index_mask[index_mask == 0] = -10000 # for stability
-                index_mask[index_mask == 1] = 0
-
-                # (T_reducedxB)
-                yhat_knn_prob = torch.logsumexp(probs + index_mask, dim=-1).clone()
-                full_yhat_knn_prob[tgt != pad_idx] = yhat_knn_prob
+            # (T_reducedxB)
+            yhat_knn_prob = torch.logsumexp(probs + index_mask, dim=-1).clone()
+            full_yhat_knn_prob[tgt != pad_idx] = yhat_knn_prob
 
             # TxBx1
             return full_yhat_knn_prob.view(qshape[0], qshape[1], 1)
