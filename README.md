@@ -183,8 +183,8 @@ python eval_lm.py data-bin/wikitext-103 \
     --context-window 1536 --tokens-per-sample 1536 \
     --dstore-mmap checkpoints/dstore_adaptive --knn-keytype 'last_ffn_input' \
     --use-adaptive-mem --model-overrides "{'knn_keytype': 'last_ffn_input'}" \
-    --save-knnlm-dstore --k 1024 --lmbda 0.25 --dstore-size 103225485 \
-    --probe 32 --knnlm --fp16
+    --adaptive-mem-log-prob-thresh -1.0 --k 1024 --lmbda 0.25 --probe 32 \
+    --save-knnlm-dstore --knnlm --fp16
 ```
 
 For Wikitext-2, the total number of tokens in the training set is `2088628`. The dstore size `2087092` is `1536` tokens less than the total due to the context-window. We want each key to be constructed using a minimum amount of prior context.

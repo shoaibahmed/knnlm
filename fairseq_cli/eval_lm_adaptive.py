@@ -254,10 +254,11 @@ def main_adaptive(parsed_args):
             for i, hypos_i in enumerate(hypos):
                 hypo = hypos_i[0]
                 shape = hypo['dstore_keys'].shape
+                pos_scores = hypo['positional_scores'].float()
                 if shape[0] == args.tokens_per_sample:
                     key = hypo['dstore_keys'].view(-1, args.decoder_embed_dim).cpu().numpy().astype(key_dtype)
                     val = hypo['tokens'].view(-1, 1).cpu().numpy().astype(val_dtype)
-                    knn_dstore.add_item_to_store(key, val)
+                    knn_dstore.add_item_to_store(key, val, pos_scores)
                 else:
                     print('Skipping this one with shape', shape)
 
@@ -265,7 +266,6 @@ def main_adaptive(parsed_args):
 
                 tokens = hypo['tokens']
                 tgt_len = tokens.numel()
-                pos_scores = hypo['positional_scores'].float()
 
                 if args.add_bos_token:
                     assert hypo['tokens'][0].item() == task.target_dictionary.bos()
@@ -320,12 +320,11 @@ def main_adaptive(parsed_args):
             update_iter = 1
             if ex_i % update_iter == update_iter - 1:
                 new_hypos = scorer.generate(models, sample, knn_dstore=knn_dstore)
-                print(f"Scores before update: {[x[0]['score'] for x in hypos]}")
+                print(f"Scores before update: {[x[0]['score'] for x in hypos]} / {[x[0]['positional_scores'].float().sum() for x in hypos]}")
                 knn_dstore.update_datastore()
 
                 new_hypos = scorer.generate(models, sample, knn_dstore=knn_dstore)
-                print(f"Scores after update: {[x[0]['score'] for x in new_hypos]}")
-                exit()
+                print(f"Scores after update: {[x[0]['score'] for x in new_hypos]} / {[x[0]['positional_scores'].float().sum() for x in new_hypos]}")
 
     knn_dstore.print_datastore_stats()
 

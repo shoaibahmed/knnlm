@@ -495,7 +495,7 @@ def add_eval_lm_args(parser):
     # TODO: add the adaptive memory params here
     group.add_argument('--use-adaptive-mem', action='store_true',
                        help='dynamically decide which items to store in the non-parametric memory')
-    group.add_argument('--adaptive-mem-log-prob-thresh', default=-1.0, type=float,
+    group.add_argument('--adaptive-mem-log-prob-thresh', default=None, type=float,
                        help='log prob thershold which defines which examples to store in the non-parametric memory (defaults to -1.)')
     # fmt: on
 

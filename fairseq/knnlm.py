@@ -143,6 +143,8 @@ class In_Memory_KNN_Dstore(KNN_Dstore):
         self.use_gpu_index = None
         self.use_temporary_cache = True
 
+        self.memory_sigma = args.adaptive_mem_log_prob_thresh
+
         if self.use_vector_db:
             self.setup_vector_db()
         else:
@@ -190,11 +192,23 @@ class In_Memory_KNN_Dstore(KNN_Dstore):
         self.vector_db.create_index("embeddings", index)
         self.vector_db.load()  # load the collection in memory for vector search
 
-    def add_item_to_store(self, k: torch.Tensor, v: torch.Tensor) -> None:
+    def add_item_to_store(self, k: torch.Tensor, v: torch.Tensor, token_log_probs: torch.Tensor = None) -> None:
         if isinstance(k, np.ndarray):
             k = torch.from_numpy(k)
         if isinstance(v, np.ndarray):
             v = torch.from_numpy(v)
+
+        # discard memories that are not important to be saved
+        if token_log_probs is not None:
+            if isinstance(token_log_probs, np.ndarray):
+                token_log_probs = torch.from_numpy(token_log_probs)
+
+            if self.memory_sigma is not None:
+                prev_k_shape, prev_v_shape = k.shape, v.shape
+                important_mems = token_log_probs < self.memory_sigma  # the log-prob is lower than sigma
+                k = k[important_mems]
+                v = v[important_mems]
+                print(f"!! Using sigma={self.memory_sigma} / Available memories: (k: {prev_k_shape} / v: {prev_v_shape}) / Retained memories: (k: {k.shape} / v: {v.shape})")
 
         if self.use_half_prec:
             k = k.half()  # only keys are required to be converted
@@ -340,7 +354,8 @@ class In_Memory_KNN_Dstore(KNN_Dstore):
         elif self.use_temporary_cache:  # temporary caching creating a faiss index
             if not self.use_tensors_for_faiss:
                 queries = queries.detach().cpu().numpy()  # convert to numpy arrays
-            selected_dists, nearest_neighbors = self.index.search(queries, self.k)
+            k = min(self.k, len(self.keys))
+            selected_dists, nearest_neighbors = self.index.search(queries, k)
             nearest_neighbors = torch.from_numpy(nearest_neighbors).to(self.device)
             selected_dists = torch.from_numpy(selected_dists).to(self.device)
             selected_vals = torch.stack([torch.gather(self.values[:, 0], dim=0, index=nearest_neighbors[i, :])
