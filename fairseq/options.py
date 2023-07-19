@@ -496,7 +496,11 @@ def add_eval_lm_args(parser):
     group.add_argument('--use-adaptive-mem', action='store_true',
                        help='dynamically decide which items to store in the non-parametric memory')
     group.add_argument('--adaptive-mem-log-prob-thresh', default=None, type=float,
-                       help='log prob thershold which defines which examples to store in the non-parametric memory (defaults to -1.)')
+                       help='log prob thershold which defines which examples to store in the non-parametric memory (defaults to no pruning)')
+    group.add_argument('--prune-memory-strength-thresh', default=None, type=float,
+                       help='dynamically prune memories below the defined strength threshold (defaults to none)')
+    group.add_argument('--memory-decay-factor', default=None, type=float,
+                       help='multiplicative decay factor for the memory (defaults to none)')
     # fmt: on
 
 

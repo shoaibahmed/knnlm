@@ -143,7 +143,10 @@ class In_Memory_KNN_Dstore(KNN_Dstore):
         self.use_gpu_index = None
         self.use_temporary_cache = True
 
-        self.memory_sigma = args.adaptive_mem_log_prob_thresh
+        self.memory_strengths = None
+        self.adaptive_mem_log_prob_thresh = args.adaptive_mem_log_prob_thresh
+        self.prune_memory_strength_thresh = args.prune_memory_strength_thresh
+        self.memory_decay_factor = args.memory_decay_factor
 
         if self.use_vector_db:
             self.setup_vector_db()
@@ -203,12 +206,12 @@ class In_Memory_KNN_Dstore(KNN_Dstore):
             if isinstance(token_log_probs, np.ndarray):
                 token_log_probs = torch.from_numpy(token_log_probs)
 
-            if self.memory_sigma is not None:
+            if self.adaptive_mem_log_prob_thresh is not None:
                 prev_size = len(k)
-                important_mems = token_log_probs < self.memory_sigma  # the log-prob is lower than sigma
+                important_mems = token_log_probs < self.adaptive_mem_log_prob_thresh  # the log-prob is lower than sigma
                 k = k[important_mems]
                 v = v[important_mems]
-                print(f"\t !! Using sigma={self.memory_sigma} / Available memories: {prev_size} / Retained memories: {len(k)}")
+                print(f"\t !! Using sigma={self.adaptive_mem_log_prob_thresh} / Available memories: {prev_size} / Retained memories: {len(k)}")
 
         if self.use_half_prec:
             k = k.half()  # only keys are required to be converted
@@ -269,27 +272,46 @@ class In_Memory_KNN_Dstore(KNN_Dstore):
                     self.values = torch.cat([self.values, v], dim=0)
                 print(f"!! New item added in memory store / k: {self.keys.shape} / v: {self.values.shape}")
 
-    def clear_weak_memories(self, weak_memory_threshold=0.1):
-        raise NotImplementedError
+    def prune_weak_memories(self):
+        if self.prune_memory_strength_thresh is None:
+            return
 
-    def update_memory_strengths(self, decay_factor=0.01):  # Knocks off a memory if not used for 90 updates
-        raise NotImplementedError
-        self.memory_strengths -= decay_factor
+        if self.memory_strengths is None:
+            raise RuntimeError("Weak memory pruning function called without memory strenght initialization")
+
+        retained_mem_mask = self.memory_strengths >= self.prune_memory_strength_thresh
+        total_mem = len(self.keys)
+        self.keys = self.keys[retained_mem_mask]
+        self.values = self.values[retained_mem_mask]
+        print(f"\t !! Memory prune theshold: {self.prune_memory_strength_thresh} / # total memories: {total_mem} / # pruned memories: {len(self.keys)}")
+
+    def update_memory_strengths(self):  # Knocks off a memory if not used for 90 updates
+        if self.memory_decay_factor is None:
+            return
+        self.memory_strengths *= self.memory_decay_factor
+        raise NotImplementedError("Strength update based on nearest neighbor access not implemented")
 
     def update_datastore(self, model_dim=1024):
         """Integrates items from temporary cache into the datastore and updates the index"""
         assert self.use_temporary_cache, "Build index assumes that temporary caching is enabled"
         if self.keys is not None:
-            # TODO: clear weak memories
-            # self.clear_weak_memories()
+            # Prune old memories
+            self.prune_weak_memories()
 
             old_keys_shape = self.keys.shape
             self.keys = torch.cat([self.keys] + self.temporary_cache['k'], dim=0)
             self.values = torch.cat([self.values] + self.temporary_cache['v'], dim=0)
+            new_added_vals = len(self.keys) - old_keys_shape[0]
+            if self.prune_memory_strength_thresh is not None:
+                if new_added_vals > 0:
+                    new_memory_strengths = torch.ones((new_added_vals,), dytpe=torch.float32)
+                    self.memory_strengths = torch.cat([self.memory_strengths, new_memory_strengths], dim=0)
             print(f"!! Cache elements integrated into datastore / previous keys shape: {old_keys_shape} / new keys shape: {self.keys.shape}")
         else:
             self.keys = torch.cat(self.temporary_cache['k'], dim=0)
             self.values = torch.cat(self.temporary_cache['v'], dim=0)
+            if self.prune_memory_strength_thresh is not None:
+                self.memory_strengths = torch.ones((len(self.keys),), dytpe=torch.float32)
             print(f"!! Cache elements integrated into datastore / previous keys shape: none / new keys shape: {self.keys.shape}")
 
         # Reset temporary cache
@@ -297,6 +319,9 @@ class In_Memory_KNN_Dstore(KNN_Dstore):
 
         # Update index
         self.update_index(model_dim)
+
+        # Update memory strengths
+        self.update_memory_strengths()
 
     def update_index(self, model_dim=1024, use_ivf=False):
         # Supports FAISS-GPU index (https://github.com/facebookresearch/faiss/wiki/Faiss-on-the-GPU)
