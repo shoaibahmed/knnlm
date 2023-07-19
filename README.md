@@ -183,7 +183,8 @@ python eval_lm.py data-bin/wikitext-103 \
     --context-window 1536 --tokens-per-sample 1536 \
     --dstore-mmap checkpoints/dstore_adaptive --knn-keytype 'last_ffn_input' \
     --use-adaptive-mem --model-overrides "{'knn_keytype': 'last_ffn_input'}" \
-    --adaptive-mem-log-prob-thresh -1.0 --k 1024 --lmbda 0.25 --probe 32 \
+    --adaptive-mem-log-prob-thresh -1.0 --prune-memory-strength-thresh 0.1 \
+    --memory-decay-factor 0.9 --k 1024 --lmbda 0.25 --probe 32 \
     --save-knnlm-dstore --knnlm --fp16
 ```
 
