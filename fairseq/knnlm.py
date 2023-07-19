@@ -1,14 +1,12 @@
+import time
 import torch
 import faiss
-import math
 import numpy as np
 from fairseq import utils
-import time
-from fairseq.data import Dictionary
+from typing import Tuple
 
 from pymilvus import (
     connections,
-    utility,
     FieldSchema,
     CollectionSchema,
     DataType,
@@ -289,7 +287,7 @@ class In_Memory_KNN_Dstore(KNN_Dstore):
                     self.values = torch.cat([self.values, v], dim=0)
                 print(f"!! New item added in memory store / k: {self.keys.shape} / v: {self.values.shape}")
 
-    def prune_weak_memories(self):
+    def prune_weak_memories(self) -> None:
         if self.prune_memory_strength_thresh is None:
             return
 
@@ -304,18 +302,24 @@ class In_Memory_KNN_Dstore(KNN_Dstore):
         self.values = self.values[retained_mem_mask]
         print(f"\t !! Memory prune theshold: {self.prune_memory_strength_thresh} / # total memories: {total_mem} / # pruned memories: {len(self.keys)}")
 
-    def update_memory_strengths(self):  # Knocks off a memory if not used for 90 updates
+    def update_memory_strengths(self, token_log_probs: torch.Tensor) -> None:
+        # Update here the strengths for the nearest neighbors based on their contribution in reducing the perplexity
+        assert len(token_log_probs.shape) == 2, token_log_probs.shape
+
+        if self.last_nearest_neighbors is not None:
+            assert len(self.last_nearest_neighbors.shape) == 2, self.last_nearest_neighbors.shape
+            token_perplexity = torch.exp(-token_log_probs)
+            for i in range(len(token_log_probs)):
+                self.memory_strengths[self.last_nearest_neighbors[i, :]] += token_perplexity[i, :]  # add token perplexity
+
+    def decay_memory_strengths(self) -> None:
         if self.memory_decay_factor is None:
             return
-
-        # TODO: Update here the strengths for the nearest neighbors based on their contribution in reducing the perplexity
-        if self.last_nearest_neighbors is not None:
-            raise NotImplementedError("Strength update based on nearest neighbor access not implemented")
 
         # Decay the memory strengths
         self.memory_strengths *= self.memory_decay_factor
 
-    def update_datastore(self, model_dim=1024):
+    def update_datastore(self, model_dim: int = 1024) -> None:
         """Integrates items from temporary cache into the datastore and updates the index"""
         assert self.use_temporary_cache, "Build index assumes that temporary caching is enabled"
 
@@ -337,10 +341,10 @@ class In_Memory_KNN_Dstore(KNN_Dstore):
         # Update index
         self.update_index(model_dim)
 
-        # Update memory strengths
-        self.update_memory_strengths()
+        # Update memory strengths due to decay
+        self.decay_memory_strengths()
 
-    def update_index(self, model_dim=1024, use_ivf=False):
+    def update_index(self, model_dim: int = 1024, use_ivf: bool = False) -> None:
         # Supports FAISS-GPU index (https://github.com/facebookresearch/faiss/wiki/Faiss-on-the-GPU)
         # Rebuild the index
         print(f"!! Rebuilding {'GPU' if self.use_gpu_index else 'CPU'}-FAISS index")
@@ -364,7 +368,7 @@ class In_Memory_KNN_Dstore(KNN_Dstore):
         print(f"!! Index creation took {time.time() - start} seconds")
         self.index.nprobe = self.index_nprobe  # nprobe is the number of cells (out of nlist) that are visited to perform a search
 
-    def get_knns(self, queries, use_batched_version=False):
+    def get_knns(self, queries: torch.Tensor, use_batched_version: bool = False) -> Tuple[torch.Tensor, torch.Tensor]:
         """Batched version is disabled by default as it is super expensive in terms of memory"""
         assert len(queries.shape) == 2, queries.shape
         self.last_nearest_neighbors = None
@@ -443,7 +447,7 @@ class In_Memory_KNN_Dstore(KNN_Dstore):
         self.last_nearest_neighbors = nearest_neighbors
         return selected_dists, selected_vals
 
-    def get_knn_log_prob(self, queries, tgt, pad_idx):
+    def get_knn_log_prob(self, queries: torch.Tensor, tgt: torch.Tensor, pad_idx: int) -> torch.Tensor:
         with torch.no_grad():
             # queries  are TxBxC
             # reshape: (TxB)xC

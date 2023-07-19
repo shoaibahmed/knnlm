@@ -246,6 +246,8 @@ def main_adaptive(parsed_args):
 
             gen_timer.start()
             hypos = scorer.generate(models, sample, knn_dstore=knn_dstore)
+            full_pos_scores = torch.stack([x[0]['positional_scores'] for x in hypos], dim=0)
+            knn_dstore.update_memory_strengths(full_pos_scores)  # update the strength of the kNN memories
             gen_timer.stop(sample['ntokens'])
 
             key_dtype = np.float16 if args.dstore_fp16 else np.float32
@@ -258,7 +260,7 @@ def main_adaptive(parsed_args):
                 if shape[0] == args.tokens_per_sample:
                     key = hypo['dstore_keys'].view(-1, args.decoder_embed_dim).cpu().numpy().astype(key_dtype)
                     val = hypo['tokens'].view(-1, 1).cpu().numpy().astype(val_dtype)
-                    knn_dstore.add_item_to_store(key, val, pos_scores)
+                    knn_dstore.add_item_to_store(key, val, pos_scores)  # add item to memory -- only relevant ones
                 else:
                     print('Skipping this one with shape', shape)
 
