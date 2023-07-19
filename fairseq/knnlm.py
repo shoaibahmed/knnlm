@@ -133,6 +133,11 @@ class In_Memory_KNN_Dstore(KNN_Dstore):
         self.keys = None
         self.values = None
         self.memory_strengths = None
+        self.last_nearest_neighbors = None
+
+        self.adaptive_mem_log_prob_thresh = args.adaptive_mem_log_prob_thresh
+        self.prune_memory_strength_thresh = args.prune_memory_strength_thresh
+        self.memory_decay_factor = args.memory_decay_factor
 
         self.dist_metric = "squared_l2"
         self.use_vector_db = False
@@ -144,10 +149,6 @@ class In_Memory_KNN_Dstore(KNN_Dstore):
         self.temporary_cache = None
         self.use_gpu_index = None
         self.use_temporary_cache = True
-
-        self.adaptive_mem_log_prob_thresh = args.adaptive_mem_log_prob_thresh
-        self.prune_memory_strength_thresh = args.prune_memory_strength_thresh
-        self.memory_decay_factor = args.memory_decay_factor
 
         if self.use_vector_db:
             self.setup_vector_db()
@@ -306,8 +307,13 @@ class In_Memory_KNN_Dstore(KNN_Dstore):
     def update_memory_strengths(self):  # Knocks off a memory if not used for 90 updates
         if self.memory_decay_factor is None:
             return
+
+        # TODO: Update here the strengths for the nearest neighbors based on their contribution in reducing the perplexity
+        if self.last_nearest_neighbors is not None:
+            raise NotImplementedError("Strength update based on nearest neighbor access not implemented")
+
+        # Decay the memory strengths
         self.memory_strengths *= self.memory_decay_factor
-        raise NotImplementedError("Strength update based on nearest neighbor access not implemented")
 
     def update_datastore(self, model_dim=1024):
         """Integrates items from temporary cache into the datastore and updates the index"""
@@ -361,6 +367,8 @@ class In_Memory_KNN_Dstore(KNN_Dstore):
     def get_knns(self, queries, use_batched_version=False):
         """Batched version is disabled by default as it is super expensive in terms of memory"""
         assert len(queries.shape) == 2, queries.shape
+        self.last_nearest_neighbors = None
+
         if self.use_half_prec:
             queries = queries.half()  # only keys are in half precision
         else:
@@ -377,15 +385,19 @@ class In_Memory_KNN_Dstore(KNN_Dstore):
 
             selected_dists = []
             selected_vals = []
+            nearest_neighbors = []
             for hits in result:  # iterate over queries
                 selected_dists.append([])
                 selected_vals.append([])
+                nearest_neighbors.append([])
                 for hit in hits:  # iterate over nearest neighbors for each query
                     selected_dists[-1].append(float(hit.distance))
                     selected_vals[-1].append(hit.entity.get('next_token'))
+                    nearest_neighbors[-1].append(int(hit.id))
                     # print(f"hit: {hit}, random field: {hit.entity.get('next_token')}")
             selected_dists = torch.tensor(selected_dists)
             selected_vals = torch.tensor(selected_vals)
+            nearest_neighbors = torch.tensor(nearest_neighbors)
 
         elif self.use_temporary_cache:  # temporary caching creating a faiss index
             if not self.use_tensors_for_faiss:
@@ -428,6 +440,7 @@ class In_Memory_KNN_Dstore(KNN_Dstore):
             selected_vals = torch.stack([torch.gather(self.values[:, 0], dim=0, index=nearest_neighbors[i, :])
                                         for i in range(nearest_neighbors.shape[0])], dim=0)  # values are tensor of size [N' x 1]
 
+        self.last_nearest_neighbors = nearest_neighbors
         return selected_dists, selected_vals
 
     def get_knn_log_prob(self, queries, tgt, pad_idx):
