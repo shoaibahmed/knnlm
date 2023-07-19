@@ -204,11 +204,11 @@ class In_Memory_KNN_Dstore(KNN_Dstore):
                 token_log_probs = torch.from_numpy(token_log_probs)
 
             if self.memory_sigma is not None:
-                prev_k_shape, prev_v_shape = k.shape, v.shape
+                prev_size = len(k)
                 important_mems = token_log_probs < self.memory_sigma  # the log-prob is lower than sigma
                 k = k[important_mems]
                 v = v[important_mems]
-                print(f"!! Using sigma={self.memory_sigma} / Available memories: (k: {prev_k_shape} / v: {prev_v_shape}) / Retained memories: (k: {k.shape} / v: {v.shape})")
+                print(f"\t !! Using sigma={self.memory_sigma} / Available memories: {prev_size} / Retained memories: {len(k)}")
 
         if self.use_half_prec:
             k = k.half()  # only keys are required to be converted
