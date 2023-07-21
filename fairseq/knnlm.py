@@ -312,7 +312,7 @@ class In_Memory_KNN_Dstore(KNN_Dstore):
             sim = -dists.cuda()  # negative of the distance can be considered as similarity which softmax needs
             probs = utils.log_softmax(sim, dim=-1)
 
-            # Remove padded tokens and pick indices where the prediction agrees with the target
+            # Remove contribution of indices where the prediction disagrees with the target (only computing perplexity of the target sequence)
             index_mask = torch.eq(vals.long().cuda().squeeze(-1), tgt[tgt != pad_idx].unsqueeze(-1)).float()
             index_mask[index_mask == 0] = -10000 # for stability
             index_mask[index_mask == 1] = 0
@@ -324,7 +324,7 @@ class In_Memory_KNN_Dstore(KNN_Dstore):
                 self.last_nearest_neighbor_probs[index_mask == 0] = 0.  # set update for nearest neighbors with incorrect label to zero
 
             # (T_reducedxB)
-            yhat_knn_prob = torch.logsumexp(probs + index_mask, dim=-1).clone()
+            yhat_knn_prob = torch.logsumexp(probs + index_mask, dim=-1).clone()  # sum the probablity from the different nearest neighbors with the correct label
             full_yhat_knn_prob[tgt != pad_idx] = yhat_knn_prob
 
             # TxBx1
