@@ -127,12 +127,14 @@ class In_Memory_KNN_Dstore(KNN_Dstore):
         self.prune_memory_strength_thresh = args.prune_memory_strength_thresh
         self.memory_decay_factor = args.memory_decay_factor
 
+        self.only_correct_label_strength_update = True  # memory strength is only updated for nearest neighbors with the correct label
         self.use_cuda = False
         self.use_half_prec = False  # FAISS doesn't support half precision keys
         self.index = None
         self.index_nprobe = args.probe
         self.use_gpu_index = True
         self.use_tensors_for_faiss = False  # Latest FAISS version will directly support PyTorch tensors
+
         if self.use_gpu_index:
             self.use_cuda = self.use_tensors_for_faiss
         print("!! Using GPU FAISS index?", self.use_gpu_index)
@@ -310,14 +312,16 @@ class In_Memory_KNN_Dstore(KNN_Dstore):
             sim = -dists.cuda()  # negative of the distance can be considered as similarity which softmax needs
             probs = utils.log_softmax(sim, dim=-1)
 
-            # Cache the nn idx and nn probs for memory strength updates
-            self.last_nearest_neighbors = nearest_neighbors.detach().to(self.device)
-            self.last_nearest_neighbor_probs = torch.nn.functional.softmax(sim.float(), dim=-1).detach().to(self.device)
-
-            # Remove padded tokens and pick indices where the prediction argrees with the target
+            # Remove padded tokens and pick indices where the prediction agrees with the target
             index_mask = torch.eq(vals.long().cuda().squeeze(-1), tgt[tgt != pad_idx].unsqueeze(-1)).float()
             index_mask[index_mask == 0] = -10000 # for stability
             index_mask[index_mask == 1] = 0
+
+            # Cache the nn idx and nn probs for memory strength updates
+            self.last_nearest_neighbors = nearest_neighbors.detach().to(self.device)
+            self.last_nearest_neighbor_probs = torch.nn.functional.softmax(sim.float(), dim=-1).detach().to(self.device)
+            if self.only_correct_label_strength_update:
+                self.last_nearest_neighbor_probs[index_mask == 0] = 0.  # set update for nearest neighbors with incorrect label to zero
 
             # (T_reducedxB)
             yhat_knn_prob = torch.logsumexp(probs + index_mask, dim=-1).clone()
