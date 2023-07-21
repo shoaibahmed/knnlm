@@ -298,11 +298,14 @@ class In_Memory_KNN_Dstore(KNN_Dstore):
 
         retained_mem_mask = self.memory_strengths >= self.prune_memory_strength_thresh
         total_mem = len(self.keys)
-        self.keys = self.keys[retained_mem_mask]
-        self.values = self.values[retained_mem_mask]
-        if self.memory_strengths is not None:
-            self.memory_strengths = self.memory_strengths[retained_mem_mask]
-        print(f"\t !! Memory prune theshold: {self.prune_memory_strength_thresh} / # total memories: {total_mem} / # pruned memories: {len(self.keys)}")
+        retained_mem = int(torch.sum(retained_mem_mask))
+        pruned_mem = total_mem - retained_mem
+        if retained_mem > 0:
+            self.keys = self.keys[retained_mem_mask]
+            self.values = self.values[retained_mem_mask]
+            if self.memory_strengths is not None:
+                self.memory_strengths = self.memory_strengths[retained_mem_mask]
+            print(f"\t !! Memory prune theshold: {self.prune_memory_strength_thresh} / # total memories (old: {total_mem} / new: {len(self.keys)}) / # memories pruned: {pruned_mem}")
 
     def update_memory_strengths(self, token_log_probs: torch.Tensor) -> None:
         # Update here the strengths for the nearest neighbors based on their contribution in reducing the perplexity

@@ -318,15 +318,14 @@ def main_adaptive(parsed_args):
             wps_meter.update(sample['ntokens'])
             t.log({'wps': round(wps_meter.avg)})
 
-            # TODO: remove it (only for testing)
-            update_iter = 1
-            if ex_i % update_iter == update_iter - 1:
-                new_hypos = scorer.generate(models, sample, knn_dstore=knn_dstore)
-                print(f"Scores before update: {[x[0]['score'] for x in hypos]} / {[x[0]['positional_scores'].float().sum() for x in hypos]}")
+            if ex_i % args.datastore_update_freq == args.datastore_update_freq - 1:
+                debug = False
+                if debug:
+                    print(f"\t [D] Scores before update: {[x[0]['score'] for x in hypos]} / {[x[0]['positional_scores'].float().sum() for x in hypos]}")
                 knn_dstore.update_datastore()
-
-                new_hypos = scorer.generate(models, sample, knn_dstore=knn_dstore)
-                print(f"Scores after update: {[x[0]['score'] for x in new_hypos]} / {[x[0]['positional_scores'].float().sum() for x in new_hypos]}")
+                if debug:
+                    new_hypos = scorer.generate(models, sample, knn_dstore=knn_dstore)
+                    print(f"\t [D] Scores after update: {[x[0]['score'] for x in new_hypos]} / {[x[0]['positional_scores'].float().sum() for x in new_hypos]}")
 
     knn_dstore.print_datastore_stats()
 
