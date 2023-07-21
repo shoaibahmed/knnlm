@@ -309,11 +309,13 @@ class In_Memory_KNN_Dstore(KNN_Dstore):
 
     def update_memory_strengths(self, token_log_probs: torch.Tensor) -> None:
         # Update here the strengths for the nearest neighbors based on their contribution in reducing the perplexity
-        assert len(token_log_probs.shape) == 1, token_log_probs.shape
         if self.last_nearest_neighbors is None:
             return
+        assert len(token_log_probs.shape) == 1, token_log_probs.shape
+        assert len(self.last_nearest_neighbors) == len(token_log_probs), f"{self.last_nearest_neighbors.shape} != {token_log_probs.shape}"
 
         assert len(self.last_nearest_neighbors.shape) == 2, self.last_nearest_neighbors.shape
+        # TODO: take into account the nearest neighbor's contribution to the reduction in perplexity
         token_perplexity = torch.exp(-token_log_probs.float().to(self.device))
         for i in range(len(token_log_probs)):
             self.memory_strengths[self.last_nearest_neighbors[i, :]] += token_perplexity[i]  # add token perplexity
