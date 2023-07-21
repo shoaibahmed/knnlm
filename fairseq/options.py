@@ -493,8 +493,8 @@ def add_eval_lm_args(parser):
                        help='If saving knnlm dstore, save keys and values to this file')
 
     # Adaptive memory params
-    group.add_argument('--load-existing-datastore', action='store_true',
-                       help='loads existing datastore into non-parametric memory')
+    group.add_argument('--existing-datastore-path', default=None, type=str,
+                       help='loads existing datastore into non-parametric memory if path is specified (defaults to none)')
     group.add_argument('--use-adaptive-mem', action='store_true',
                        help='dynamically decide which items to store in the non-parametric memory')
     group.add_argument('--adaptive-mem-log-prob-thresh', default=None, type=float,

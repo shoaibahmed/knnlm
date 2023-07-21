@@ -126,7 +126,6 @@ class In_Memory_KNN_Dstore(KNN_Dstore):
         self.adaptive_mem_log_prob_thresh = args.adaptive_mem_log_prob_thresh
         self.prune_memory_strength_thresh = args.prune_memory_strength_thresh
         self.memory_decay_factor = args.memory_decay_factor
-        self.dstore_output_file = args.dstore_mmap
 
         self.use_cuda = False
         self.use_half_prec = False  # FAISS doesn't support half precision keys
@@ -308,11 +307,12 @@ class In_Memory_KNN_Dstore(KNN_Dstore):
             nearest_neighbors, dists, vals = self.get_knns(queries[tgt != pad_idx])
 
             # (T_reducedxB)xK
-            dists = dists.cuda()
-            probs = utils.log_softmax(-dists, dim=-1)
+            sim = -dists.cuda()
+            probs = utils.log_softmax(sim, dim=-1)
 
-            self.last_nearest_neighbors = nearest_neighbors.detach().to(self.device)  # cache the nn idx for strength update
-            self.last_nearest_neighbor_probs = probs.exp().detach().to(self.device)  # cache the nn probs for strength update
+            # Cache the nn idx and nn probs for memory strength updates
+            self.last_nearest_neighbors = nearest_neighbors.detach().to(self.device)
+            self.last_nearest_neighbor_probs = torch.nn.functional.softmax(sim.float(), dim=-1).detach().to(self.device)
 
             # Remove padded tokens and pick indices where the prediction argrees with the target
             index_mask = torch.eq(vals.long().cuda().squeeze(-1), tgt[tgt != pad_idx].unsqueeze(-1)).float()
@@ -329,16 +329,19 @@ class In_Memory_KNN_Dstore(KNN_Dstore):
     def print_datastore_stats(self) -> None:
         print(f"[DATASTORE STATS] / Keys: {self.keys.shape} / Values: {self.values.shape} / Memory strength: {self.memory_strengths.shape if self.memory_strengths is not None else 'None'}")
 
-    def save_datastore(self) -> None:
-        print(f"!! Saving datastore to file: {self.dstore_output_file}")
+    def save_datastore(self, datastore_path) -> None:
+        print(f"!! Saving datastore to file: {datastore_path}")
         output_dict = {"keys": self.keys, "values": self.values, "memory_strengths": self.memory_strengths}
-        torch.save(output_dict, self.dstore_output_file)
+        torch.save(output_dict, datastore_path)
         print(f"!! Datastore successfully saved!")
         self.print_datastore_stats()
 
-    def load_datastore(self) -> None:
-        print(f"!! Loading datastore from file: {self.dstore_output_file}")
-        assert os.path.exists(self.dstore_output_file), self.dstore_output_file
-        self.keys, self.values, self.memory_strengths = torch.load(self.dstore_output_file)
+    def load_datastore(self, datastore_path) -> None:
+        print(f"!! Loading datastore from file: {datastore_path}")
+        assert os.path.exists(datastore_path), datastore_path
+        output_dict = torch.load(datastore_path)
+        self.keys = output_dict["keys"]
+        self.values = output_dict["values"]
+        self.memory_strengths = output_dict["memory_strengths"]
         print(f"!! Datastore successfully loaded!")
         self.print_datastore_stats()

@@ -234,8 +234,8 @@ def main_adaptive(parsed_args):
     word_stats = dict()
 
     knn_dstore = In_Memory_KNN_Dstore(args)
-    if args.load_existing_datastore:
-        knn_dstore.load_datastore()
+    if args.existing_datastore_path is not None:
+        knn_dstore.load_datastore(args.existing_datastore_path)
 
     with progress_bar.build_progress_bar(args, itr) as t:
         wps_meter = TimeMeter()
@@ -329,7 +329,7 @@ def main_adaptive(parsed_args):
                     print(f"\t [D] Scores after update: {[x[0]['score'] for x in new_hypos]} / {[x[0]['positional_scores'].float().sum() for x in new_hypos]}")
 
     if args.save_knnlm_dstore:
-        knn_dstore.save_datastore()
+        knn_dstore.save_datastore(args.dstore_mmap)
 
     avg_nll_loss = -score_sum / count / math.log(2)  # convert to base 2
     logger.info('Evaluated {} tokens in {:.1f}s ({:.2f} tokens/s)'.format(
