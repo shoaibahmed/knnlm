@@ -263,7 +263,7 @@ class In_Memory_KNN_Dstore(KNN_Dstore):
             k = k.to(self.device)
             v = v.to(self.device)
             if token_perplexity is not None:
-                token_perplexity = token_perplexity.to(self.device)
+                token_perplexity = token_perplexity.float().to(self.device)
 
             if self.dist_metric == "cosine":
                 k = torch.nn.functional.normalize(k, p=2.0, dim=1)  # l2 normalize the key
@@ -300,17 +300,20 @@ class In_Memory_KNN_Dstore(KNN_Dstore):
         total_mem = len(self.keys)
         self.keys = self.keys[retained_mem_mask]
         self.values = self.values[retained_mem_mask]
+        if self.memory_strengths is not None:
+            self.memory_strengths = self.memory_strengths[retained_mem_mask]
         print(f"\t !! Memory prune theshold: {self.prune_memory_strength_thresh} / # total memories: {total_mem} / # pruned memories: {len(self.keys)}")
 
     def update_memory_strengths(self, token_log_probs: torch.Tensor) -> None:
         # Update here the strengths for the nearest neighbors based on their contribution in reducing the perplexity
-        assert len(token_log_probs.shape) == 2, token_log_probs.shape
+        assert len(token_log_probs.shape) == 1, token_log_probs.shape
+        if self.last_nearest_neighbors is None:
+            return
 
-        if self.last_nearest_neighbors is not None:
-            assert len(self.last_nearest_neighbors.shape) == 2, self.last_nearest_neighbors.shape
-            token_perplexity = torch.exp(-token_log_probs)
-            for i in range(len(token_log_probs)):
-                self.memory_strengths[self.last_nearest_neighbors[i, :]] += token_perplexity[i, :]  # add token perplexity
+        assert len(self.last_nearest_neighbors.shape) == 2, self.last_nearest_neighbors.shape
+        token_perplexity = torch.exp(-token_log_probs.float().to(self.device))
+        for i in range(len(token_log_probs)):
+            self.memory_strengths[self.last_nearest_neighbors[i, :]] += token_perplexity[i]  # add token perplexity
 
     def decay_memory_strengths(self) -> None:
         if self.memory_decay_factor is None:
@@ -397,7 +400,7 @@ class In_Memory_KNN_Dstore(KNN_Dstore):
                 for hit in hits:  # iterate over nearest neighbors for each query
                     selected_dists[-1].append(float(hit.distance))
                     selected_vals[-1].append(hit.entity.get('next_token'))
-                    nearest_neighbors[-1].append(int(hit.id))
+                    nearest_neighbors[-1].append(int(hit.id))  # TODO: validate use of id
                     # print(f"hit: {hit}, random field: {hit.entity.get('next_token')}")
             selected_dists = torch.tensor(selected_dists)
             selected_vals = torch.tensor(selected_vals)
@@ -444,7 +447,7 @@ class In_Memory_KNN_Dstore(KNN_Dstore):
             selected_vals = torch.stack([torch.gather(self.values[:, 0], dim=0, index=nearest_neighbors[i, :])
                                         for i in range(nearest_neighbors.shape[0])], dim=0)  # values are tensor of size [N' x 1]
 
-        self.last_nearest_neighbors = nearest_neighbors
+        self.last_nearest_neighbors = nearest_neighbors.detach().to(self.device)
         return selected_dists, selected_vals
 
     def get_knn_log_prob(self, queries: torch.Tensor, tgt: torch.Tensor, pad_idx: int) -> torch.Tensor:

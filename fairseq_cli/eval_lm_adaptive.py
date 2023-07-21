@@ -246,7 +246,7 @@ def main_adaptive(parsed_args):
 
             gen_timer.start()
             hypos = scorer.generate(models, sample, knn_dstore=knn_dstore)
-            full_pos_scores = torch.stack([x[0]['positional_scores'] for x in hypos], dim=0)
+            full_pos_scores = torch.cat([x[0]['positional_scores'] for x in hypos], dim=0)  # flattened
             knn_dstore.update_memory_strengths(full_pos_scores)  # update the strength of the kNN memories
             gen_timer.stop(sample['ntokens'])
 
