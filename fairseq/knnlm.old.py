@@ -138,20 +138,34 @@ class In_Memory_KNN_Dstore(KNN_Dstore):
         self.memory_decay_factor = args.memory_decay_factor
 
         self.dist_metric = "squared_l2"
+        self.use_vector_db = False
+        self.device = None
+        self.use_half_prec = False
+        self.iterator = 0  # counts the number of items
+        self.index_update_steps = 5
+        self.insertion_steps = 0  # counts the number of insertions to identify index update
+        self.temporary_cache = None
+        self.use_gpu_index = None
+        self.use_temporary_cache = True
 
-        self.use_cuda = False
-        self.use_half_prec = False  # FAISS doesn't support half precision keys
-        self.index = None
-        self.index_nprobe = args.probe
-        self.use_gpu_index = True
-        self.use_tensors_for_faiss = False  # Latest FAISS version will directly support PyTorch tensors
-        if self.use_gpu_index:
-            self.use_cuda = self.use_tensors_for_faiss
-        print("!! Using GPU FAISS index?", self.use_gpu_index)
-        self.reset_cache()
-
-        self.device = torch.device("cuda" if torch.cuda.is_available() and self.use_cuda else "cpu")
-        print("!! Keystore device:", self.device)
+        if self.use_vector_db:
+            self.setup_vector_db()
+        else:
+            self.use_cuda = False
+            if self.use_temporary_cache:
+                self.use_half_prec = False  # FAISS doesn't support half precision keys
+                self.index = None
+                self.index_nprobe = args.probe
+                self.use_gpu_index = True
+                self.use_tensors_for_faiss = False  # Latest FAISS version will directly support PyTorch tensors
+                if self.use_gpu_index:
+                    self.use_cuda = self.use_tensors_for_faiss
+                print("!! Using GPU FAISS index?", self.use_gpu_index)
+                self.reset_cache()
+            else:
+                self.use_cuda = True
+            self.device = torch.device("cuda" if torch.cuda.is_available() and self.use_cuda else "cpu")
+            print("!! Keystore device:", self.device)
 
     def reset_cache(self):
         self.temporary_cache = {"k": [], "v": [], "strength": []}
@@ -160,13 +174,37 @@ class In_Memory_KNN_Dstore(KNN_Dstore):
         print("!! Skipping FAISS setup for in-memory KNN DStore...")
         return  # don't do anything
 
+    def setup_vector_db(self):
+        print("!! Setting up vector database for in-memory KNN DStore...")
+        # https://milvus.io/docs/v2.0.x/example_code.md
+        connections.connect(alias="default", host="localhost", port="19530")
+
+        # Create the schema
+        fields = [
+            FieldSchema(name="pk", dtype=DataType.INT64, is_primary=True, auto_id=False),
+            FieldSchema(name="embeddings", dtype=DataType.FLOAT_VECTOR, dim=1024),
+            FieldSchema(name="next_token", dtype=DataType.INT64),
+        ]
+        schema = CollectionSchema(fields, "Next token database")
+        self.vector_db = Collection("next_token_db", schema)
+
+        # Create index
+        print("!! Creating index at the start for vector database")
+        index = {
+            "index_type": "IVF_FLAT",
+            "metric_type": "L2",
+            "params": {"nlist": 128},
+        }
+        self.vector_db.create_index("embeddings", index)
+        self.vector_db.load()  # load the collection in memory for vector search
+
     def add_item_to_store(self, k: torch.Tensor, v: torch.Tensor, token_log_probs: torch.Tensor = None) -> None:
         if isinstance(k, np.ndarray):
             k = torch.from_numpy(k)
         if isinstance(v, np.ndarray):
             v = torch.from_numpy(v)
 
-        # Discard memories that are not important to be saved
+        # discard memories that are not important to be saved
         token_perplexity = None
         if token_log_probs is not None:
             if isinstance(token_log_probs, np.ndarray):
@@ -185,19 +223,69 @@ class In_Memory_KNN_Dstore(KNN_Dstore):
         else:
             k = k.to(torch.float32)  # avoid double precision
 
-        k = k.to(self.device)
-        v = v.to(self.device)
-        if token_perplexity is not None:
-            token_perplexity = token_perplexity.float().to(self.device)
+        if self.use_vector_db:
+            if token_perplexity is not None:
+                raise NotImplementedError("Memory strength not integrated into vector DB")
 
-        if self.dist_metric == "cosine":
-            k = torch.nn.functional.normalize(k, p=2.0, dim=1)  # l2 normalize the key
+            b = len(k)
+            entities = [
+                [self.iterator+i for i in range(b)],
+                [x.tolist() for x in k.cpu().numpy()],
+                [int(x.tolist()[0]) for x in v.cpu().numpy()],  # convert the vector to int
+            ]
+            self.vector_db.insert(entities)
+            self.iterator += b
+            print(f"!! New {b} item(s) added to the vector datastore")
 
-        self.temporary_cache["k"].append(k)
-        self.temporary_cache["v"].append(v)
-        if token_perplexity is not None:
-            self.temporary_cache["strength"].append(token_perplexity)
-        print(f"!! New item added in temporary cache / temporary cache size: {len(self.temporary_cache['k'])} / keys in store: {self.keys.shape if self.keys is not None else 'none'}")
+            # update the index
+            rebuild_index = False
+            if rebuild_index:  # not really necessary (https://github.com/milvus-io/milvus/discussions/22280)
+                if self.insertion_steps % self.index_update_steps == 0:
+                    if self.insertion_steps > 0:
+                        # Release collection first to create an index
+                        print("!! Releasing vector collection for index creation")
+                        self.vector_db.release()
+
+                    # Create an index for the vector DB
+                    print("!! Generating index for the vector database")
+                    index = {
+                        "index_type": "IVF_FLAT",
+                        "metric_type": "L2",
+                        "params": {"nlist": 128},
+                    }
+                    self.vector_db.create_index("embeddings", index)
+
+                    print("!! Loading vector collection in memory")
+                    self.vector_db.load()  # load the collection in memory for vector search
+            self.insertion_steps += 1
+
+        else:
+            k = k.to(self.device)
+            v = v.to(self.device)
+            if token_perplexity is not None:
+                token_perplexity = token_perplexity.float().to(self.device)
+
+            if self.dist_metric == "cosine":
+                k = torch.nn.functional.normalize(k, p=2.0, dim=1)  # l2 normalize the key
+
+            if self.use_temporary_cache:
+                self.temporary_cache["k"].append(k)
+                self.temporary_cache["v"].append(v)
+                if token_perplexity is not None:
+                    self.temporary_cache["strength"].append(token_perplexity)
+                print(f"!! New item added in temporary cache / temporary cache size: {len(self.temporary_cache['k'])} / keys in store: {self.keys.shape if self.keys is not None else 'none'}")
+            else:
+                if token_perplexity is not None:
+                    raise NotImplementedError("Memory strength not integrated into direct memory store")
+
+                if self.keys is None:
+                    assert self.values is None
+                    self.keys = k
+                    self.values = v
+                else:
+                    self.keys = torch.cat([self.keys, k], dim=0)
+                    self.values = torch.cat([self.values, v], dim=0)
+                print(f"!! New item added in memory store / k: {self.keys.shape} / v: {self.values.shape}")
 
     def prune_weak_memories(self) -> None:
         if self.prune_memory_strength_thresh is None:
@@ -298,14 +386,71 @@ class In_Memory_KNN_Dstore(KNN_Dstore):
         else:
             queries = queries.to(torch.float32)  # avoid double precision
 
-        if not self.use_tensors_for_faiss:
-            queries = queries.detach().cpu().numpy()  # convert to numpy arrays
-        k = min(self.k, len(self.keys))
-        selected_dists, nearest_neighbors = self.index.search(queries, k)
-        nearest_neighbors = torch.from_numpy(nearest_neighbors).to(self.device)
-        selected_dists = torch.from_numpy(selected_dists).to(self.device)
-        selected_vals = torch.stack([torch.gather(self.values[:, 0], dim=0, index=nearest_neighbors[i, :])
-                                    for i in range(nearest_neighbors.shape[0])], dim=0)  # values are tensor of size [N' x 1]
+        if self.use_vector_db:
+            # Search the vector store
+            vectors_to_search = [x.tolist() for x in queries.cpu().numpy()]
+            search_params = {
+                "metric_type": "L2",
+                "params": {"nprobe": 10},
+            }
+            result = self.vector_db.search(vectors_to_search, "embeddings", search_params, limit=self.k, output_fields=["next_token"])
+
+            selected_dists = []
+            selected_vals = []
+            nearest_neighbors = []
+            for hits in result:  # iterate over queries
+                selected_dists.append([])
+                selected_vals.append([])
+                nearest_neighbors.append([])
+                for hit in hits:  # iterate over nearest neighbors for each query
+                    selected_dists[-1].append(float(hit.distance))
+                    selected_vals[-1].append(hit.entity.get('next_token'))
+                    nearest_neighbors[-1].append(int(hit.id))  # TODO: validate use of id
+                    # print(f"hit: {hit}, random field: {hit.entity.get('next_token')}")
+            selected_dists = torch.tensor(selected_dists)
+            selected_vals = torch.tensor(selected_vals)
+            nearest_neighbors = torch.tensor(nearest_neighbors)
+
+        elif self.use_temporary_cache:  # temporary caching creating a faiss index
+            if not self.use_tensors_for_faiss:
+                queries = queries.detach().cpu().numpy()  # convert to numpy arrays
+            k = min(self.k, len(self.keys))
+            selected_dists, nearest_neighbors = self.index.search(queries, k)
+            nearest_neighbors = torch.from_numpy(nearest_neighbors).to(self.device)
+            selected_dists = torch.from_numpy(selected_dists).to(self.device)
+            selected_vals = torch.stack([torch.gather(self.values[:, 0], dim=0, index=nearest_neighbors[i, :])
+                                        for i in range(nearest_neighbors.shape[0])], dim=0)  # values are tensor of size [N' x 1]
+
+        else:
+            # self.keys shape: B x D
+            queries = queries.detach().to(self.device)
+            if self.dist_metric in ["l2", "squared_l2"]:
+                if use_batched_version:
+                    dist = ((queries[:, None, :] - self.keys[None, :, :]) ** 2).sum(dim=2)  # (N' x 1, D) - (1 x N x D).T -> N' x N x D -> N' x N
+                else:
+                    dist = torch.stack([((queries[i:i+1, :] - self.keys) ** 2).sum(dim=1) for i in range(len(queries))], dim=0)
+                assert dist.shape == (len(queries), len(self.keys)), dist.shape
+                if self.dist_metric == "l2":
+                    dist = torch.sqrt(dist)
+            elif self.dist_metric == "cosine":
+                queries = torch.nn.functional.normalize(queries, p=2.0, dim=1)  # l2 normalize the query
+                if use_batched_version:
+                    sim = torch.matmul(queries, self.keys.T)  # (N' x D) x (N x D).T -> N' x N
+                else:
+                    sim = torch.cat([torch.matmul(queries[i:i+1, :], self.keys.T) for i in range(len(queries))], dim=0)  # (1 x D) x (N x D).T -> [1 x N]
+                assert sim.shape == (len(queries), len(self.keys)), sim.shape
+                dist = 1.0 - sim  # cosine distance
+            else:
+                raise RuntimeError(f"Unknown distance metric: {self.dist_metric}")
+
+            # Compute nearest neighbors based on the distance
+            dist_idx_sorted = torch.argsort(dist, dim=1, descending=False)
+            nearest_neighbors = dist_idx_sorted[:, :self.k]  # as distances are sorted in ascending order
+
+            # Select the nearest neighbors
+            selected_dists = torch.gather(dist, dim=1, index=nearest_neighbors)
+            selected_vals = torch.stack([torch.gather(self.values[:, 0], dim=0, index=nearest_neighbors[i, :])
+                                        for i in range(nearest_neighbors.shape[0])], dim=0)  # values are tensor of size [N' x 1]
 
         self.last_nearest_neighbors = nearest_neighbors.detach().to(self.device)
         return selected_dists, selected_vals
@@ -341,7 +486,7 @@ class In_Memory_KNN_Dstore(KNN_Dstore):
             return full_yhat_knn_prob.view(qshape[0], qshape[1], 1)
 
     def print_datastore_stats(self) -> None:
-        print(f"[DATASTORE STATS] / Keys: {self.keys.shape} / Values: {self.values.shape} / Memory strength: {self.memory_strengths.shape if self.memory_strengths is not None else 'None'} / Distance metric: {self.dist_metric}")
-
-    def save_datastore(self) -> None:
-        raise NotImplementedError
+        if self.use_vector_db:
+            print(f"Milvus vector database / Size: {self.iterator} / Insertion steps: {self.insertion_steps}")
+        else:
+            print(f"Datastore stats / Keys: {self.keys.shape} / Values: {self.values.shape} / Distance metric: {self.dist_metric}")
