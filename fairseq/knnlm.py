@@ -121,6 +121,7 @@ class In_Memory_KNN_Dstore(KNN_Dstore):
         self.keys = None
         self.values = None
         self.memory_strengths = None
+        self.memory_life = None
         self.last_nearest_neighbors = None
 
         self.adaptive_mem_log_prob_thresh = args.adaptive_mem_log_prob_thresh
@@ -202,9 +203,15 @@ class In_Memory_KNN_Dstore(KNN_Dstore):
         if pruned_mem > 0:
             self.keys = self.keys[retained_mem_mask]
             self.values = self.values[retained_mem_mask]
+            avg_pruned_memory_life = None
             if self.memory_strengths is not None:
                 self.memory_strengths = self.memory_strengths[retained_mem_mask]
-            print(f"\t !! Memory prune theshold: {self.prune_memory_strength_thresh} / # total memories (old: {total_mem} / new: {len(self.keys)}) / # memories pruned: {pruned_mem}")
+                avg_pruned_memory_life = float(self.memory_life[torch.logical_not(retained_mem_mask)].float().mean())
+                self.memory_life = self.memory_life[retained_mem_mask]
+            print(f"\t !! Memory prune theshold: {self.prune_memory_strength_thresh} / # total memories (old: {total_mem} / new: {len(self.keys)}) / # memories pruned: {pruned_mem} / average pruned memory life: {avg_pruned_memory_life:.4f}")
+
+        # Increment the memory life counter
+        self.memory_life += 1
 
     def update_memory_strengths(self, token_log_probs: torch.Tensor) -> None:
         # Update here the strengths for the nearest neighbors based on their contribution in reducing the perplexity
@@ -223,6 +230,7 @@ class In_Memory_KNN_Dstore(KNN_Dstore):
     def decay_memory_strengths(self) -> None:
         if self.memory_decay_factor is None:
             return
+        assert self.memory_strengths is not None, "Memory strength not logged as memory prune threshold is none"
 
         # Decay the memory strengths
         self.memory_strengths *= self.memory_decay_factor
@@ -231,14 +239,23 @@ class In_Memory_KNN_Dstore(KNN_Dstore):
         # Prune old memories
         self.prune_weak_memories()
 
+        # Add the new entries in the cache to the datastore
         old_keys_shape = self.keys.shape if self.keys is not None else None
         self.keys = torch.cat(([self.keys] if self.keys is not None else []) + self.temporary_cache['k'], dim=0)
         self.values = torch.cat(([self.values] if self.values is not None else []) + self.temporary_cache['v'], dim=0)
         if self.prune_memory_strength_thresh is not None:
+            num_new_memories = len(self.keys) - (old_keys_shape[0] if old_keys_shape is not None else 0)
             assert len(self.temporary_cache['strength']) == len(self.temporary_cache['k']), self.temporary_cache['strength']
             self.memory_strengths = torch.cat(([self.memory_strengths] if self.memory_strengths is not None else []) +
                                               self.temporary_cache['strength'], dim=0)
+            init_counters = torch.zeros((num_new_memories,), dtype=torch.int64).to(self.device)  # initialize memory life counter to zero
+            self.memory_life = torch.cat(([self.memory_life] if self.memory_life is not None else []) + [init_counters], dim=0)
         print(f"!! Cache elements integrated into datastore / previous keys shape: {old_keys_shape} / new keys shape: {self.keys.shape}")
+
+        # Validate that the length of the values matches
+        assert len(self.keys) == len(self.values), f"{self.keys.shape} != {self.values.shape}"
+        if self.prune_memory_strength_thresh is not None:
+            assert len(self.keys) == len(self.memory_strengths) == len(self.memory_life), f"{self.keys.shape} != {self.values.memory_strengths} != {self.values.memory_life}"
 
         # Reset temporary cache
         self.reset_cache()
@@ -273,7 +290,7 @@ class In_Memory_KNN_Dstore(KNN_Dstore):
         print(f"!! Index creation took {time.time() - start} seconds")
         self.index.nprobe = self.index_nprobe  # nprobe is the number of cells (out of nlist) that are visited to perform a search
 
-    def get_knns(self, queries: torch.Tensor, use_batched_version: bool = False) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    def get_knns(self, queries: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """Batched version is disabled by default as it is super expensive in terms of memory"""
         assert len(queries.shape) == 2, queries.shape
         self.last_nearest_neighbors = None
@@ -331,11 +348,18 @@ class In_Memory_KNN_Dstore(KNN_Dstore):
             return full_yhat_knn_prob.view(qshape[0], qshape[1], 1)
 
     def print_datastore_stats(self) -> None:
-        print(f"[DATASTORE STATS] / Keys: {self.keys.shape} / Values: {self.values.shape} / Memory strength: {self.memory_strengths.shape if self.memory_strengths is not None else 'None'}")
+        print(f"=== [DATASTORE STATS] ===")
+        print(f"\t ~ Keys: {self.keys.shape}")
+        print(f"\t ~ Values: {self.values.shape}")
+        if self.memory_strengths is not None:
+            assert self.memory_life is not None
+            print(f"\t ~ Memory strengths: {self.memory_strengths.shape}")
+            print(f"\t ~ Memory life: {self.memory_life.shape} | min: {int(self.memory_life.min())} / mean: {float(self.memory_life.float().mean()):.4f} / max: {int(torch.max(self.memory_life))}")
+        print(f"=========================")
 
     def save_datastore(self, datastore_path) -> None:
         print(f"!! Saving datastore to file: {datastore_path}")
-        output_dict = {"keys": self.keys, "values": self.values, "memory_strengths": self.memory_strengths}
+        output_dict = {"keys": self.keys, "values": self.values, "memory_strengths": self.memory_strengths, "memory_life": self.memory_life}
         torch.save(output_dict, datastore_path)
         print(f"!! Datastore successfully saved!")
         self.print_datastore_stats()
@@ -347,5 +371,6 @@ class In_Memory_KNN_Dstore(KNN_Dstore):
         self.keys = output_dict["keys"]
         self.values = output_dict["values"]
         self.memory_strengths = output_dict["memory_strengths"]
+        self.memory_life = output_dict["memory_life"]
         print(f"!! Datastore successfully loaded!")
         self.print_datastore_stats()

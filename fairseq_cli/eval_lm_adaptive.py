@@ -96,7 +96,7 @@ class InMemoryDataStore:
         if len(q.shape) == 1:
             q = q.expand_dim(dim=0)
 
-        log_prob_vector = torch.zeros_like(lm_log_probs)
+        log_prob_vector = torch.full_like(lm_log_probs, -10000)  # since it is log-prob
         if self.k is not None:  # zero probability for every token otherwise
             # self.k shape: B x D
             if self.dist_metric in ["l2", "squared_l2"]:
