@@ -300,7 +300,7 @@ class In_Memory_KNN_Dstore(KNN_Dstore):
         total_mem = len(self.keys)
         retained_mem = int(torch.sum(retained_mem_mask))
         pruned_mem = total_mem - retained_mem
-        if retained_mem > 0:
+        if pruned_mem > 0:
             self.keys = self.keys[retained_mem_mask]
             self.values = self.values[retained_mem_mask]
             if self.memory_strengths is not None:
