@@ -307,7 +307,7 @@ class In_Memory_KNN_Dstore(KNN_Dstore):
             nearest_neighbors, dists, vals = self.get_knns(queries[tgt != pad_idx])
 
             # (T_reducedxB)xK
-            sim = -dists.cuda()
+            sim = -dists.cuda()  # negative of the distance can be considered as similarity which softmax needs
             probs = utils.log_softmax(sim, dim=-1)
 
             # Cache the nn idx and nn probs for memory strength updates
