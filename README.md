@@ -181,7 +181,7 @@ python eval_lm.py data-bin/wikitext-103 \
     --sample-break-mode none --max-tokens 3072 \
     --softmax-batch 1024 --gen-subset train \
     --context-window 1536 --tokens-per-sample 1536 \
-    --dstore-mmap checkpoints/dstore_adaptive --knn-keytype 'last_ffn_input' \
+    --dstore-mmap checkpoints/dstore_adaptive.pt --knn-keytype 'last_ffn_input' \
     --use-adaptive-mem --model-overrides "{'knn_keytype': 'last_ffn_input'}" \
     --adaptive-mem-log-prob-thresh -1.0 --prune-memory-strength-thresh 0.1 \
     --memory-decay-factor 0.9 --k 1024 --lmbda 0.25 --probe 32 \
@@ -233,3 +233,20 @@ python eval_lm.py data-bin/wikitext-103 \
 ```
 
 If your hardware constraints make this too slow, you can run it without using full precision keys by adding two flags: `--no-load-keys` and `--knn-sim-func "do_not_recomp_l2"`. This uses the quantized versions of keys stored within the FAISS index. You can make things faster by reducing the value of the `probe` (the number of clusters FAISS checks for neighbors) at the cost of performance. You can also try reducing the number of neighbors `k`.
+
+
+When considering the in-memory adaptive datstore, just need to add the flag to indicate the requirement for loading existing datastore saved during the training phase:
+
+```bash
+python eval_lm.py data-bin/wikitext-103 \
+    --path checkpoints/checkpoint_best.pt \
+    --sample-break-mode none --max-tokens 3072 \
+    --softmax-batch 1024 --gen-subset valid \
+    --context-window 1536 --tokens-per-sample 1536 \
+    --dstore-mmap checkpoints/dstore_adaptive.pt --knn-keytype 'last_ffn_input' \
+    --use-adaptive-mem --model-overrides "{'knn_keytype': 'last_ffn_input'}" \
+    --adaptive-mem-log-prob-thresh -1.0 --prune-memory-strength-thresh 0.1 \
+    --memory-decay-factor 0.9 --k 1024 --lmbda 0.25 --probe 32 \
+    --datastore-update-freq 1 --save-knnlm-dstore --knnlm --fp16 \
+    --load-existing-datastore
+```

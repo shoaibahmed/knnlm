@@ -1,17 +1,10 @@
+import os
 import time
 import torch
 import faiss
 import numpy as np
 from fairseq import utils
 from typing import Tuple
-
-from pymilvus import (
-    connections,
-    FieldSchema,
-    CollectionSchema,
-    DataType,
-    Collection,
-)
 
 
 class KNN_Dstore(object):
@@ -24,7 +17,6 @@ class KNN_Dstore(object):
         self.sim_func = args.knn_sim_func
         self.dstore_fp16 = args.dstore_fp16
         self.index = self.setup_faiss(args)
-
 
     def setup_faiss(self, args):
         if not args.dstore_filename:
@@ -68,12 +60,10 @@ class KNN_Dstore(object):
 
         return index
 
-
     def get_knns(self, queries):
         start = time.time()
         dists, knns = self.index.search(queries.detach().cpu().float().numpy(), self.k)
         return dists, knns
-
 
     def get_knn_log_prob(self, queries, tgt, pad_idx):
         def dist_func(d, k, q, function=None):
@@ -136,8 +126,7 @@ class In_Memory_KNN_Dstore(KNN_Dstore):
         self.adaptive_mem_log_prob_thresh = args.adaptive_mem_log_prob_thresh
         self.prune_memory_strength_thresh = args.prune_memory_strength_thresh
         self.memory_decay_factor = args.memory_decay_factor
-
-        self.dist_metric = "squared_l2"
+        self.dstore_output_file = args.dstore_mmap
 
         self.use_cuda = False
         self.use_half_prec = False  # FAISS doesn't support half precision keys
@@ -190,9 +179,6 @@ class In_Memory_KNN_Dstore(KNN_Dstore):
         if token_perplexity is not None:
             token_perplexity = token_perplexity.float().to(self.device)
 
-        if self.dist_metric == "cosine":
-            k = torch.nn.functional.normalize(k, p=2.0, dim=1)  # l2 normalize the key
-
         self.temporary_cache["k"].append(k)
         self.temporary_cache["v"].append(v)
         if token_perplexity is not None:
@@ -225,12 +211,13 @@ class In_Memory_KNN_Dstore(KNN_Dstore):
             return
         assert len(token_log_probs.shape) == 1, token_log_probs.shape
         assert len(self.last_nearest_neighbors) == len(token_log_probs), f"{self.last_nearest_neighbors.shape} != {token_log_probs.shape}"
-
         assert len(self.last_nearest_neighbors.shape) == 2, self.last_nearest_neighbors.shape
-        # TODO: take into account the nearest neighbor's contribution to the reduction in perplexity
+        assert self.last_nearest_neighbor_probs.shape == self.last_nearest_neighbors.shape, f"{self.last_nearest_neighbor_probs.shape} != {self.last_nearest_neighbors.shape}"
+
         token_perplexity = torch.exp(-token_log_probs.float().to(self.device))
         for i in range(len(token_log_probs)):
-            self.memory_strengths[self.last_nearest_neighbors[i, :]] += token_perplexity[i]  # add token perplexity
+            prob_weighted_perplexity = token_perplexity[i] * self.last_nearest_neighbor_probs[i, :]  # weight the token perplexity by the softmax probs
+            self.memory_strengths[self.last_nearest_neighbors[i, :]] += prob_weighted_perplexity  # upweight memory strength
 
     def decay_memory_strengths(self) -> None:
         if self.memory_decay_factor is None:
@@ -240,9 +227,6 @@ class In_Memory_KNN_Dstore(KNN_Dstore):
         self.memory_strengths *= self.memory_decay_factor
 
     def update_datastore(self, model_dim: int = 1024) -> None:
-        """Integrates items from temporary cache into the datastore and updates the index"""
-        assert self.use_temporary_cache, "Build index assumes that temporary caching is enabled"
-
         # Prune old memories
         self.prune_weak_memories()
 
@@ -288,7 +272,7 @@ class In_Memory_KNN_Dstore(KNN_Dstore):
         print(f"!! Index creation took {time.time() - start} seconds")
         self.index.nprobe = self.index_nprobe  # nprobe is the number of cells (out of nlist) that are visited to perform a search
 
-    def get_knns(self, queries: torch.Tensor, use_batched_version: bool = False) -> Tuple[torch.Tensor, torch.Tensor]:
+    def get_knns(self, queries: torch.Tensor, use_batched_version: bool = False) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """Batched version is disabled by default as it is super expensive in terms of memory"""
         assert len(queries.shape) == 2, queries.shape
         self.last_nearest_neighbors = None
@@ -307,28 +291,30 @@ class In_Memory_KNN_Dstore(KNN_Dstore):
         selected_vals = torch.stack([torch.gather(self.values[:, 0], dim=0, index=nearest_neighbors[i, :])
                                     for i in range(nearest_neighbors.shape[0])], dim=0)  # values are tensor of size [N' x 1]
 
-        self.last_nearest_neighbors = nearest_neighbors.detach().to(self.device)
-        return selected_dists, selected_vals
+        return nearest_neighbors, selected_dists, selected_vals
 
     def get_knn_log_prob(self, queries: torch.Tensor, tgt: torch.Tensor, pad_idx: int) -> torch.Tensor:
         with torch.no_grad():
             # queries  are TxBxC
             # reshape: (TxB)xC
             qshape = queries.shape
-            if self.keys is None and self.iterator == 0:  # iterator takes care of the vector db
+            if self.keys is None:  # no prob
                 full_yhat_knn_prob = torch.zeros((qshape[0], qshape[1], 1), dtype=torch.float32).cuda()
                 return full_yhat_knn_prob
 
             full_yhat_knn_prob = torch.full([qshape[0]*qshape[1]], -10000, dtype=torch.float32).cuda()
             queries = queries.view(-1, qshape[-1])
             tgt = tgt.contiguous().view(-1)
-            dists, vals = self.get_knns(queries[tgt != pad_idx])
+            nearest_neighbors, dists, vals = self.get_knns(queries[tgt != pad_idx])
 
             # (T_reducedxB)xK
             dists = dists.cuda()
             probs = utils.log_softmax(-dists, dim=-1)
 
-            # We already know the target that we would like to predict -- probability only contributes to target label
+            self.last_nearest_neighbors = nearest_neighbors.detach().to(self.device)  # cache the nn idx for strength update
+            self.last_nearest_neighbor_probs = probs.exp().detach().to(self.device)  # cache the nn probs for strength update
+
+            # Remove padded tokens and pick indices where the prediction argrees with the target
             index_mask = torch.eq(vals.long().cuda().squeeze(-1), tgt[tgt != pad_idx].unsqueeze(-1)).float()
             index_mask[index_mask == 0] = -10000 # for stability
             index_mask[index_mask == 1] = 0
@@ -341,7 +327,18 @@ class In_Memory_KNN_Dstore(KNN_Dstore):
             return full_yhat_knn_prob.view(qshape[0], qshape[1], 1)
 
     def print_datastore_stats(self) -> None:
-        print(f"[DATASTORE STATS] / Keys: {self.keys.shape} / Values: {self.values.shape} / Memory strength: {self.memory_strengths.shape if self.memory_strengths is not None else 'None'} / Distance metric: {self.dist_metric}")
+        print(f"[DATASTORE STATS] / Keys: {self.keys.shape} / Values: {self.values.shape} / Memory strength: {self.memory_strengths.shape if self.memory_strengths is not None else 'None'}")
 
     def save_datastore(self) -> None:
-        raise NotImplementedError
+        print(f"!! Saving datastore to file: {self.dstore_output_file}")
+        output_dict = {"keys": self.keys, "values": self.values, "memory_strengths": self.memory_strengths}
+        torch.save(output_dict, self.dstore_output_file)
+        print(f"!! Datastore successfully saved!")
+        self.print_datastore_stats()
+
+    def load_datastore(self) -> None:
+        print(f"!! Loading datastore from file: {self.dstore_output_file}")
+        assert os.path.exists(self.dstore_output_file), self.dstore_output_file
+        self.keys, self.values, self.memory_strengths = torch.load(self.dstore_output_file)
+        print(f"!! Datastore successfully loaded!")
+        self.print_datastore_stats()

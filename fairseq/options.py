@@ -492,11 +492,15 @@ def add_eval_lm_args(parser):
     group.add_argument('--dstore-mmap', default=None, type=str,
                        help='If saving knnlm dstore, save keys and values to this file')
 
-    # TODO: add the adaptive memory params here
+    # Adaptive memory params
+    group.add_argument('--load-existing-datastore', action='store_true',
+                       help='loads existing datastore into non-parametric memory')
     group.add_argument('--use-adaptive-mem', action='store_true',
                        help='dynamically decide which items to store in the non-parametric memory')
     group.add_argument('--adaptive-mem-log-prob-thresh', default=None, type=float,
                        help='log prob thershold which defines which examples to store in the non-parametric memory (defaults to no pruning)')
+    group.add_argument('--datastore-update-freq', default=1, type=int,
+                       help='update frequency of the non-parametric memory (defaults to 1)')
     group.add_argument('--prune-memory-strength-thresh', default=None, type=float,
                        help='dynamically prune memories below the defined strength threshold (defaults to none)')
     group.add_argument('--memory-decay-factor', default=None, type=float,
