@@ -256,14 +256,15 @@ def main_adaptive(parsed_args):
 
             for i, hypos_i in enumerate(hypos):
                 hypo = hypos_i[0]
-                shape = hypo['dstore_keys'].shape
                 pos_scores = hypo['positional_scores'].float()
-                if shape[0] == args.tokens_per_sample:
-                    key = hypo['dstore_keys'].view(-1, args.decoder_embed_dim).cpu().numpy().astype(key_dtype)
-                    val = hypo['tokens'].view(-1, 1).cpu().numpy().astype(val_dtype)
-                    knn_dstore.add_item_to_store(key, val, pos_scores)  # add item to memory -- only relevant ones
-                else:
-                    print('Skipping this one with shape', shape)
+
+                key = hypo['dstore_keys'].view(-1, args.decoder_embed_dim).cpu().numpy().astype(key_dtype)
+                val = hypo['tokens'].view(-1, 1).cpu().numpy().astype(val_dtype)
+                if len(key) != len(pos_scores):  # TODO: Validate this change -- pos scores stops early at tgt length
+                    assert len(key) > len(pos_scores), f"{len(key)} < {len(pos_scores)}"
+                    key = key[:len(pos_scores)]
+                    val = val[:len(pos_scores)]
+                knn_dstore.add_item_to_store(key, val, pos_scores)  # add item to memory -- only relevant ones
 
                 sample_id = sample['id'][i]
 
