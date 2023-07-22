@@ -497,6 +497,8 @@ def add_eval_lm_args(parser):
                        help='loads existing datastore into non-parametric memory if path is specified (defaults to none)')
     group.add_argument('--use-adaptive-mem', action='store_true',
                        help='dynamically decide which items to store in the non-parametric memory')
+    group.add_argument('--shuffle-dataset', action='store_true',
+                       help='shuffle dataset before constructing datastore -- important for adaptive memory in general')
     group.add_argument('--adaptive-mem-log-prob-thresh', default=None, type=float,
                        help='log prob thershold which defines which examples to store in the non-parametric memory (defaults to no pruning)')
     group.add_argument('--datastore-update-freq', default=1, type=int,

@@ -208,7 +208,9 @@ def main_adaptive(parsed_args):
         num_shards=args.num_shards,
         shard_id=args.shard_id,
         num_workers=args.num_workers,
-    ).next_epoch_itr(shuffle=False)
+    ).next_epoch_itr(shuffle=args.shuffle_dataset)
+    if args.shuffle_dataset:
+        print("[INFO] Dataset batch shuffling enabled")
 
     gen_timer = StopwatchMeter()
     scorer = SequenceScorer(task.target_dictionary, args.softmax_batch, args=args)
@@ -262,6 +264,7 @@ def main_adaptive(parsed_args):
                 val = hypo['tokens'].view(-1, 1).cpu().numpy().astype(val_dtype)
                 if len(key) != len(pos_scores):  # TODO: Validate this change -- pos scores stops early at tgt length
                     assert len(key) > len(pos_scores), f"{len(key)} < {len(pos_scores)}"
+                    print(f"[WARNING] dataset key size ({key.shape}) is larger than the positional scores shape: {pos_scores.shape}. Discarding key tokens...")
                     key = key[:len(pos_scores)]
                     val = val[:len(pos_scores)]
                 knn_dstore.add_item_to_store(key, val, pos_scores)  # add item to memory -- only relevant ones

@@ -1,6 +1,6 @@
 #!/bin/bash
 
-echo "Generating datastore from the training set"
+echo "Generating datastore from the training set (with dataset shuffling)"
 python eval_lm.py data-bin/wikitext-103 \
     --path checkpoints/checkpoint_best.pt \
     --sample-break-mode none --max-tokens 3072 \
@@ -9,7 +9,7 @@ python eval_lm.py data-bin/wikitext-103 \
     --dstore-mmap checkpoints/dstore_adaptive_train.pt --knn-keytype 'last_ffn_input' \
     --use-adaptive-mem --model-overrides "{'knn_keytype': 'last_ffn_input'}" \
     --adaptive-mem-log-prob-thresh -1.0 --prune-memory-strength-thresh 0.1 \
-    --memory-decay-factor 0.9 --k 1024 --lmbda 0.25 --probe 32 \
+    --memory-decay-factor 0.9 --k 1024 --lmbda 0.25 --probe 32 --shuffle-dataset \
     --datastore-update-freq 1 --save-knnlm-dstore --knnlm --fp16 | tee logs/train_datastore.log
 
 echo "Using a dynamic pretrained (on the training set) datastore on the validation set"
@@ -22,7 +22,7 @@ python eval_lm.py data-bin/wikitext-103 \
     --adaptive-mem-log-prob-thresh -1.0 --prune-memory-strength-thresh 0.1 \
     --memory-decay-factor 0.9 --k 1024 --lmbda 0.25 --probe 32 \
     --datastore-update-freq 1 --save-knnlm-dstore --knnlm --fp16 \
-    --existing_datastore_path checkpoints/dstore_adaptive_train.pt | tee logs/train_val_datastore.log
+    --existing_datastore_path checkpoints/dstore_adaptive_train.pt > logs/train_val_datastore.log 2>&1
 
 echo "Using a dynamic datastore on the validation set"
 python eval_lm.py data-bin/wikitext-103 \
@@ -33,4 +33,4 @@ python eval_lm.py data-bin/wikitext-103 \
     --use-adaptive-mem --model-overrides "{'knn_keytype': 'last_ffn_input'}" \
     --adaptive-mem-log-prob-thresh -1.0 --prune-memory-strength-thresh 0.1 \
     --memory-decay-factor 0.9 --k 1024 --lmbda 0.25 --probe 32 \
-    --datastore-update-freq 1 --save-knnlm-dstore --knnlm --fp16 | tee logs/val_datastore.log
+    --datastore-update-freq 1 --save-knnlm-dstore --knnlm --fp16 > logs/val_datastore.log 2>&1
