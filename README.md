@@ -249,3 +249,10 @@ python eval_lm.py data-bin/wikitext-103 \
     --datastore-update-freq 1 --save-knnlm-dstore --knnlm --fp16 \
     --existing_datastore_path checkpoints/dstore_adaptive.pt
 ```
+
+
+## TODOs
+
+- Include the lambda role in the memory strenght updates
+- Homogenize the use of either negative log probs or perplexity for both memory initialization as well as memory strenght updates
+- Implement NewsCrawl-20H1 and GPT-2 to compare results with semiparametric eval paper
