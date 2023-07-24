@@ -174,6 +174,8 @@ class In_Memory_KNN_Dstore(KNN_Dstore):
                 if self.use_token_perplexity:
                     token_log_probs = -token_log_probs  # perplexity is negative exponential of probs
                 token_importance = torch.exp(token_log_probs)
+                if not self.use_token_perplexity:  # token importance is the inverse of the probability assigned to the correct label
+                    token_importance = 1. - token_importance
                 print(f"\t !! Using sigma={self.adaptive_mem_log_prob_thresh} / Available memories: {prev_size} / Retained memories: {len(k)}")
 
         if self.use_half_prec:
