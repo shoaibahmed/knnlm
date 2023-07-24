@@ -233,6 +233,8 @@ class In_Memory_KNN_Dstore(KNN_Dstore):
         if self.use_token_perplexity:
             token_log_probs = -token_log_probs
         token_importance = torch.exp(token_log_probs)
+        if not self.use_token_perplexity:  # token importance is the inverse of the probability assigned to the correct label
+            token_importance = 1. - token_importance
         for i in range(len(token_log_probs)):
             tgt_label_contrib = self.lmbda * token_importance[i] * self.last_nearest_neighbor_probs[i, :]  # weight the token importance by the nearest neighbor contribution as well as the lambda val
             self.memory_strengths[self.last_nearest_neighbors[i, :]] += tgt_label_contrib  # upweight memory strength
