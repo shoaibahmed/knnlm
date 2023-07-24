@@ -253,6 +253,6 @@ python eval_lm.py data-bin/wikitext-103 \
 
 ## TODOs
 
-- Include the lambda role in the memory strenght updates
-- Homogenize the use of either negative log probs or perplexity for both memory initialization as well as memory strenght updates
+- ~~Include the lambda role in the memory strenght updates~~
+- ~~Homogenize the use of either negative log probs or perplexity for both memory initialization as well as memory strength updates~~
 - Implement NewsCrawl-20H1 and GPT-2 to compare results with semiparametric eval paper

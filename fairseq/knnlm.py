@@ -127,6 +127,8 @@ class In_Memory_KNN_Dstore(KNN_Dstore):
         self.adaptive_mem_log_prob_thresh = args.adaptive_mem_log_prob_thresh
         self.prune_memory_strength_thresh = args.prune_memory_strength_thresh
         self.memory_decay_factor = args.memory_decay_factor
+        self.lmbda = args.lmbda
+        self.use_token_perplexity = args.use_perplexity_mem_strength  # uses target token probability otherwise
 
         self.only_correct_label_strength_update = True  # memory strength is only updated for nearest neighbors with the correct label
         self.use_cuda = False
@@ -158,7 +160,7 @@ class In_Memory_KNN_Dstore(KNN_Dstore):
             v = torch.from_numpy(v)
 
         # Discard memories that are not important to be saved
-        token_perplexity = None
+        token_importance = None
         if token_log_probs is not None:
             if isinstance(token_log_probs, np.ndarray):
                 token_log_probs = torch.from_numpy(token_log_probs)
@@ -168,7 +170,10 @@ class In_Memory_KNN_Dstore(KNN_Dstore):
                 important_mems = (token_log_probs < self.adaptive_mem_log_prob_thresh).to(self.device)  # the log-prob is lower than sigma
                 k = k[important_mems]
                 v = v[important_mems]
-                token_perplexity = torch.exp(-token_log_probs[important_mems])
+                token_log_probs = token_log_probs[important_mems].float()
+                if self.use_token_perplexity:
+                    token_log_probs = -token_log_probs  # perplexity is negative exponential of probs
+                token_importance = torch.exp(token_log_probs)
                 print(f"\t !! Using sigma={self.adaptive_mem_log_prob_thresh} / Available memories: {prev_size} / Retained memories: {len(k)}")
 
         if self.use_half_prec:
@@ -178,13 +183,13 @@ class In_Memory_KNN_Dstore(KNN_Dstore):
 
         k = k.to(self.device)
         v = v.to(self.device)
-        if token_perplexity is not None:
-            token_perplexity = token_perplexity.float().to(self.device)
+        if token_importance is not None:
+            token_importance = token_importance.float().to(self.device)
 
         self.temporary_cache["k"].append(k)
         self.temporary_cache["v"].append(v)
-        if token_perplexity is not None:
-            self.temporary_cache["strength"].append(token_perplexity)
+        if token_importance is not None:
+            self.temporary_cache["strength"].append(token_importance)
         print(f"!! New item added in temporary cache / temporary cache size: {len(self.temporary_cache['k'])} / keys in store: {self.keys.shape if self.keys is not None else 'none'}")
 
     def prune_weak_memories(self) -> None:
@@ -222,10 +227,13 @@ class In_Memory_KNN_Dstore(KNN_Dstore):
         assert len(self.last_nearest_neighbors.shape) == 2, self.last_nearest_neighbors.shape
         assert self.last_nearest_neighbor_probs.shape == self.last_nearest_neighbors.shape, f"{self.last_nearest_neighbor_probs.shape} != {self.last_nearest_neighbors.shape}"
 
-        token_perplexity = torch.exp(-token_log_probs.float().to(self.device))
+        token_log_probs = token_log_probs.float().to(self.device)
+        if self.use_token_perplexity:
+            token_log_probs = -token_log_probs
+        token_importance = torch.exp(token_log_probs)
         for i in range(len(token_log_probs)):
-            prob_weighted_perplexity = token_perplexity[i] * self.last_nearest_neighbor_probs[i, :]  # weight the token perplexity by the softmax probs
-            self.memory_strengths[self.last_nearest_neighbors[i, :]] += prob_weighted_perplexity  # upweight memory strength
+            tgt_label_contrib = self.lmbda * token_importance[i] * self.last_nearest_neighbor_probs[i, :]  # weight the token importance by the nearest neighbor contribution as well as the lambda val
+            self.memory_strengths[self.last_nearest_neighbors[i, :]] += tgt_label_contrib  # upweight memory strength
 
     def decay_memory_strengths(self) -> None:
         if self.memory_decay_factor is None:

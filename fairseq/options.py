@@ -503,6 +503,8 @@ def add_eval_lm_args(parser):
                        help='log prob thershold which defines which examples to store in the non-parametric memory (defaults to no pruning)')
     group.add_argument('--datastore-update-freq', default=1, type=int,
                        help='update frequency of the non-parametric memory (defaults to 1)')
+    group.add_argument('--use-perplexity-mem-strength', action='store_true',
+                       help='use perplexity as memory strenght (uses probability otherwise)')
     group.add_argument('--prune-memory-strength-thresh', default=None, type=float,
                        help='dynamically prune memories below the defined strength threshold (defaults to none)')
     group.add_argument('--memory-decay-factor', default=None, type=float,
