@@ -386,3 +386,6 @@ class In_Memory_KNN_Dstore(KNN_Dstore):
         self.memory_life = output_dict["memory_life"]
         print(f"!! Datastore successfully loaded!")
         self.print_datastore_stats()
+
+        # Rebuild index to ensure that the datastore is usable
+        self.update_index()
