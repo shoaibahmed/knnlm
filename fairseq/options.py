@@ -495,6 +495,8 @@ def add_eval_lm_args(parser):
     # Adaptive memory params
     group.add_argument('--existing-datastore-path', default=None, type=str,
                        help='loads existing datastore into non-parametric memory if path is specified (defaults to none)')
+    group.add_argument('--freeze-loaded-memories', action='store_true',
+                       help='freezes the loaded memories by setting their strength to max dtype value (only applicable if --existing-datastore-path is specified)')
     group.add_argument('--use-adaptive-mem', action='store_true',
                        help='dynamically decide which items to store in the non-parametric memory')
     group.add_argument('--shuffle-dataset', action='store_true',

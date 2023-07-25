@@ -369,20 +369,24 @@ class In_Memory_KNN_Dstore(KNN_Dstore):
             print(f"\t ~ Memory life: {self.memory_life.shape} | min: {int(self.memory_life.min())} / mean: {float(self.memory_life.float().mean()):.4f} / max: {int(torch.max(self.memory_life))}")
         print(f"=========================")
 
-    def save_datastore(self, datastore_path) -> None:
+    def save_datastore(self, datastore_path: str) -> None:
         print(f"!! Saving datastore to file: {datastore_path}")
         output_dict = {"keys": self.keys, "values": self.values, "memory_strengths": self.memory_strengths, "memory_life": self.memory_life}
         torch.save(output_dict, datastore_path)
         print(f"!! Datastore successfully saved!")
         self.print_datastore_stats()
 
-    def load_datastore(self, datastore_path) -> None:
+    def load_datastore(self, datastore_path: str, freeze_loaded_memories: bool = False) -> None:
         print(f"!! Loading datastore from file: {datastore_path}")
         assert os.path.exists(datastore_path), datastore_path
         output_dict = torch.load(datastore_path)
         self.keys = output_dict["keys"]
         self.values = output_dict["values"]
         self.memory_strengths = output_dict["memory_strengths"]
+        if freeze_loaded_memories:
+            max_val = torch.finfo(self.memory_strengths.dtype).max
+            print(f"!! Freezing memories by setting memory strength to be max val of {self.memory_strengths.dtype}: {max_val}")
+            self.memory_strengths = torch.full_like(self.memory_strengths, max_val)
         self.memory_life = output_dict["memory_life"]
         print(f"!! Datastore successfully loaded!")
         self.print_datastore_stats()

@@ -237,7 +237,7 @@ def main_adaptive(parsed_args):
 
     knn_dstore = In_Memory_KNN_Dstore(args)
     if args.existing_datastore_path is not None:
-        knn_dstore.load_datastore(args.existing_datastore_path)
+        knn_dstore.load_datastore(args.existing_datastore_path, args.freeze_loaded_memories)
 
     with progress_bar.build_progress_bar(args, itr) as t:
         wps_meter = TimeMeter()
