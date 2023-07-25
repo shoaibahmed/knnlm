@@ -499,6 +499,8 @@ def add_eval_lm_args(parser):
                        help='freezes the loaded memories by setting their strength to max dtype value (only applicable if --existing-datastore-path is specified)')
     group.add_argument('--use-adaptive-mem', action='store_true',
                        help='dynamically decide which items to store in the non-parametric memory')
+    group.add_argument('--use-adaptive-lmbda', action='store_true',
+                       help='dynamically tune lambda for deciding the weight to put on the probs from the non-parametric memory')
     group.add_argument('--shuffle-dataset', action='store_true',
                        help='shuffle dataset before constructing datastore -- important for adaptive memory in general')
     group.add_argument('--adaptive-mem-log-prob-thresh', default=None, type=float,
