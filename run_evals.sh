@@ -24,7 +24,7 @@ python eval_lm.py data-bin/wikitext-103 \
     --adaptive-mem-log-prob-thresh -1.0 --prune-memory-strength-thresh 0.001 \
     --memory-decay-factor 0.9 --k 1024 --lmbda 0.25 --probe 32 \
     --datastore-update-freq 1 --save-knnlm-dstore --knnlm --fp16 \
-    --existing_datastore_path checkpoints/dstore_adaptive_train.pt > logs/train_val_datastore.log 2>&1
+    --existing-datastore-path checkpoints/dstore_adaptive_train.pt > logs/train_val_datastore.log 2>&1
 
 echo "Using a dynamic datastore on the validation set"
 python eval_lm.py data-bin/wikitext-103 \
