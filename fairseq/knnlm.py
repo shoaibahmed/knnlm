@@ -16,7 +16,7 @@ class KNN_Dstore(object):
         self.metric_type = args.faiss_metric_type
         self.sim_func = args.knn_sim_func
         self.dstore_fp16 = args.dstore_fp16
-        self.unnormalized_sim = None
+        self.negative_distance = None
         self.index = self.setup_faiss(args)
 
     def setup_faiss(self, args):
@@ -101,7 +101,7 @@ class KNN_Dstore(object):
         dists = torch.from_numpy(dists).cuda()
         start = time.time()
         dists = dist_func(dists, knns, queries[tgt != pad_idx, :], function=self.sim_func)
-        self.unnormalized_sim = dists.detach()  # save for lambda tuning
+        self.negative_distance = dists.detach()  # save for lambda tuning
         probs = utils.log_softmax(dists, dim=-1)
 
         index_mask = torch.eq(torch.from_numpy(self.vals[knns]).long().cuda().squeeze(-1), tgt[tgt != pad_idx].unsqueeze(-1)).float()
@@ -116,8 +116,8 @@ class KNN_Dstore(object):
         # TxBx1
         return full_yhat_knn_prob.view(qshape[0], qshape[1], 1)
 
-    def get_unnormalized_similarity(self) -> torch.Tensor:
-        return self.unnormalized_sim
+    def get_negative_distance(self) -> torch.Tensor:
+        return self.negative_distance
 
 
 class In_Memory_KNN_Dstore(KNN_Dstore):
@@ -344,7 +344,7 @@ class In_Memory_KNN_Dstore(KNN_Dstore):
 
             # (T_reducedxB)xK
             sim = -dists.cuda()  # negative of the distance can be considered as similarity which softmax needs
-            self.unnormalized_sim = sim.detach()  # save for lambda tuning
+            self.negative_distance = sim.detach()  # save for lambda tuning
             probs = utils.log_softmax(sim, dim=-1)
 
             # Remove contribution of indices where the prediction disagrees with the target (only computing perplexity of the target sequence)

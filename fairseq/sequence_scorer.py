@@ -113,10 +113,14 @@ class SequenceScorer(object):
                     probs = probs.half()
 
                 if self.args.use_adaptive_lmbda:
-                    unnormalized_sim = dstore.get_unnormalized_similarity()  # num_tokens x num nearest neighbors
-                    weights = torch.exp(-unnormalized_sim)  # exponential of negative distance is bounded between 0 and 1
-                    lmbda = torch.mean(weights, axis=1)  # num_tokens
-                    print("!! Adaptive lambda value:", lmbda)
+                    negative_distance = dstore.get_negative_distance()  # num_tokens x num nearest neighbors
+                    weights = torch.exp(negative_distance)  # exponential of negative distance is bounded between 0 and 1
+                    use_mean = False
+                    if use_mean:
+                        lmbda = torch.mean(weights, axis=1)  # num_tokens
+                    else:
+                        lmbda = torch.max(weights, axis=1).values  # num_tokens
+                    print(f"!! Adaptive lambda value ({'mean' if use_mean else 'max'}): {lmbda}")
                 else:
                     lmbda = self.args.lmbda
                 probs = combine_knn_and_vocab_probs(
