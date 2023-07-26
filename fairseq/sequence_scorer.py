@@ -53,8 +53,13 @@ class SequenceScorer(object):
         def combine_knn_and_vocab_probs(knn_p, vocab_p, coeff):
             combine_probs = torch.stack([vocab_p, knn_p], dim=0)
             coeffs = torch.ones_like(combine_probs)
-            coeffs[0] = np.log(1 - coeff)
-            coeffs[1] = np.log(coeff)
+            if isinstance(coeff, torch.Tensor):
+                coeff = coeff.to(combine_probs.dtype)
+                coeffs[0] = torch.log(1 - coeff)
+                coeffs[1] = torch.log(coeff)
+            else:
+                coeffs[0] = np.log(1 - coeff)
+                coeffs[1] = np.log(coeff)
             curr_prob = torch.logsumexp(combine_probs + coeffs, dim=0)
 
             return curr_prob
@@ -107,8 +112,15 @@ class SequenceScorer(object):
                     yhat_knn_prob = yhat_knn_prob.half()
                     probs = probs.half()
 
+                if self.args.use_adaptive_lmbda:
+                    unnormalized_sim = dstore.get_unnormalized_similarity()  # num_tokens x num nearest neighbors
+                    weights = torch.exp(-unnormalized_sim)  # exponential of negative distance is bounded between 0 and 1
+                    lmbda = torch.mean(weights, axis=1)  # num_tokens
+                    print("!! Adaptive lambda value:", lmbda)
+                else:
+                    lmbda = self.args.lmbda
                 probs = combine_knn_and_vocab_probs(
-                            yhat_knn_prob, probs, self.args.lmbda)
+                            yhat_knn_prob, probs, lmbda)
 
             if avg_probs is None:
                 avg_probs = probs
