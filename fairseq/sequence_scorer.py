@@ -50,13 +50,14 @@ class SequenceScorer(object):
             )
             return probs
 
-        def combine_knn_and_vocab_probs(knn_p, vocab_p, coeff):
+        def combine_knn_and_vocab_probs(knn_p, vocab_p, coeff, mask=None):
             combine_probs = torch.stack([vocab_p, knn_p], dim=0)
             coeffs = torch.ones_like(combine_probs)
             if isinstance(coeff, torch.Tensor):
+                assert mask is not None
                 coeff = coeff.to(combine_probs.dtype)
-                coeffs[0] = torch.log(1 - coeff)
-                coeffs[1] = torch.log(coeff)
+                coeffs[0][mask] = torch.log(1 - coeff)
+                coeffs[1][mask] = torch.log(coeff)
             else:
                 coeffs[0] = np.log(1 - coeff)
                 coeffs[1] = np.log(coeff)
@@ -112,6 +113,7 @@ class SequenceScorer(object):
                     yhat_knn_prob = yhat_knn_prob.half()
                     probs = probs.half()
 
+                mask = None
                 if self.args.use_adaptive_lmbda:
                     negative_distance = dstore.get_negative_distance()  # num_tokens x num nearest neighbors
                     weights = torch.exp(negative_distance)  # exponential of negative distance is bounded between 0 and 1
@@ -121,10 +123,11 @@ class SequenceScorer(object):
                     else:
                         lmbda = torch.max(weights, axis=1).values  # num_tokens
                     print(f"!! Adaptive lambda value ({'mean' if use_mean else 'max'}): {lmbda}")
+                    mask = orig_target != self.pad  # since nearest neighbor values are only saved for non-padded tokens
                 else:
                     lmbda = self.args.lmbda
                 probs = combine_knn_and_vocab_probs(
-                            yhat_knn_prob, probs, lmbda)
+                            yhat_knn_prob, probs, lmbda, mask=mask)
 
             if avg_probs is None:
                 avg_probs = probs
