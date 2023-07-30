@@ -34,10 +34,10 @@ class KNN_Dstore(object):
                 self.keys = np.memmap(args.dstore_filename+'_keys.npy', dtype=np.float16, mode='r', shape=(self.dstore_size, self.dimension))
             self.vals = np.memmap(args.dstore_filename+'_vals.npy', dtype=np.int16, mode='r', shape=(self.dstore_size, 1))
         else:
-            print('Keys are fp32 and vals are int32')
+            print('Keys are fp32 and vals are int64')
             if not args.no_load_keys:
                 self.keys = np.memmap(args.dstore_filename+'_keys.npy', dtype=np.float32, mode='r', shape=(self.dstore_size, self.dimension))
-            self.vals = np.memmap(args.dstore_filename+'_vals.npy', dtype=np.int32, mode='r', shape=(self.dstore_size, 1))
+            self.vals = np.memmap(args.dstore_filename+'_vals.npy', dtype=np.int64, mode='r', shape=(self.dstore_size, 1))
 
         # If you wish to load all the keys into memory
         # CAUTION: Only do this if your RAM can handle it!
@@ -53,10 +53,10 @@ class KNN_Dstore(object):
                 self.keys = self.keys.astype(np.float16 if args.dstore_fp16 else np.float32)
 
             del self.vals
-            self.vals_from_memmap = np.memmap(args.dstore_filename+'_vals.npy', dtype=np.int32, mode='r', shape=(self.dstore_size, 1))
-            self.vals = np.zeros((self.dstore_size, 1), dtype=np.int16 if args.dstore_fp16 else np.int32)
+            self.vals_from_memmap = np.memmap(args.dstore_filename+'_vals.npy', dtype=np.int64, mode='r', shape=(self.dstore_size, 1))
+            self.vals = np.zeros((self.dstore_size, 1), dtype=np.int16 if args.dstore_fp16 else np.int64)
             self.vals = self.vals_from_memmap[:]
-            self.vals = self.vals.astype(np.int16 if args.dstore_fp16 else np.int32)
+            self.vals = self.vals.astype(np.int16 if args.dstore_fp16 else np.int64)
             print('Loading to memory took {} s'.format(time.time() - start))
 
         return index
