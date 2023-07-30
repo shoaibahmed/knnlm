@@ -14,3 +14,9 @@
 
 2023-07-28 04:02:26 | INFO | fairseq_cli.eval_lm | Evaluated 217646 tokens in 106043.8s (2.05 tokens/s)
 2023-07-28 04:02:26 | INFO | fairseq_cli.eval_lm | Loss (base 2): 4.5543, Perplexity: 23.50
+
+
+=========== (kNN-LM; new run of datastore eval -- adaptive lambda)
+
+2023-07-29 06:39:32 | INFO | fairseq_cli.eval_lm | Evaluated 217646 tokens in 98491.8s (2.21 tokens/s)
+2023-07-29 06:39:32 | INFO | fairseq_cli.eval_lm | Loss (base 2): 4.2153, Perplexity: 18.58
