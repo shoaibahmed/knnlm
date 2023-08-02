@@ -165,7 +165,7 @@ def main(parsed_args):
             else:
                 print('Saving fp32')
                 dstore_keys = np.memmap(args.dstore_mmap+'_keys.npy', dtype=np.float32, mode='w+', shape=(args.dstore_size, args.decoder_embed_dim))
-                dstore_vals = np.memmap(args.dstore_mmap+'_vals.npy', dtype=np.int32, mode='w+', shape=(args.dstore_size, 1))
+                dstore_vals = np.memmap(args.dstore_mmap+'_vals.npy', dtype=np.int64, mode='w+', shape=(args.dstore_size, 1))
 
         dstore_idx = 0
         for ex_i, sample in enumerate(t):
@@ -182,7 +182,7 @@ def main(parsed_args):
             gen_timer.stop(sample['ntokens'])
 
             key_dtype = np.float16 if args.dstore_fp16 else np.float32
-            val_dtype = np.int16 if args.dstore_fp16 else np.int32
+            val_dtype = np.int16 if args.dstore_fp16 else np.int64
 
             for i, hypos_i in enumerate(hypos):
                 hypo = hypos_i[0]
