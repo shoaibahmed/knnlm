@@ -115,19 +115,18 @@ class SequenceScorer(object):
 
                 mask = None
                 if self.args.use_adaptive_lmbda:
-                    use_mean = True
                     negative_distance = dstore.get_negative_distance()  # num_tokens x num nearest neighbors
                     if negative_distance is not None:
                         weights = torch.exp(negative_distance)  # exponential of negative distance is bounded between 0 and 1
-                        if use_mean:
-                            lmbda = torch.mean(weights, axis=1)  # num_tokens
-                        else:
+                        if self.args.use_max_weight_lmbda:
                             lmbda = torch.max(weights, axis=1).values  # num_tokens
-                        print(f"!! Adaptive lambda value ({'mean' if use_mean else 'max'}): {lmbda}")
+                        else:
+                            lmbda = torch.mean(weights, axis=1)  # num_tokens
+                        print(f"!! Adaptive lambda value ({'max' if self.args.use_max_weight_lmbda else 'mean'}): {lmbda}")
                         mask = orig_target != self.pad  # since nearest neighbor values are only saved for non-padded tokens
                     else:  # none for the first round when the datastore is empty
                         lmbda = self.args.lmbda
-                        print(f"!! Adaptive lambda value ({'mean' if use_mean else 'max'}) set to the default lambda value as distance is none: {lmbda}")
+                        print(f"!! Adaptive lambda value ({'max' if self.args.use_max_weight_lmbda else 'mean'}) set to the default lambda value as distance is none: {lmbda}")
                 else:
                     lmbda = self.args.lmbda
                 probs = combine_knn_and_vocab_probs(
