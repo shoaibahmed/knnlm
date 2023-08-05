@@ -115,10 +115,10 @@ class SequenceScorer(object):
 
                 mask = None
                 if self.args.use_adaptive_lmbda:
+                    use_mean = True
                     negative_distance = dstore.get_negative_distance()  # num_tokens x num nearest neighbors
                     if negative_distance is not None:
                         weights = torch.exp(negative_distance)  # exponential of negative distance is bounded between 0 and 1
-                        use_mean = True
                         if use_mean:
                             lmbda = torch.mean(weights, axis=1)  # num_tokens
                         else:
