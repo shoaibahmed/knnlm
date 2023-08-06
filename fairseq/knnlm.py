@@ -152,6 +152,7 @@ class In_Memory_KNN_Dstore(KNN_Dstore):
             print("[INFO] Using direct PyTorch tensor computation instead of FAISS index...")
             self.use_cuda = True
             self.use_half_prec = True
+            self.dist_metric = "squared_l2"
 
         self.reset_cache()
 
@@ -317,21 +318,20 @@ class In_Memory_KNN_Dstore(KNN_Dstore):
         print(f"!! Index creation took {time.time() - start} seconds")
         self.index.nprobe = self.index_nprobe  # nprobe is the number of cells (out of nlist) that are visited to perform a search
 
-    def get_nns(self, queries: torch.Tensor, k: int, dist_metric: str = "squared_l2",
-                use_batched_version: bool = False):
+    def get_nns(self, queries: torch.Tensor, k: int, use_batched_version: bool = False):
         assert not self.use_faiss_index
 
         # self.keys shape: B x D
         queries = queries.detach().to(self.device)
-        if dist_metric in ["l2", "squared_l2"]:
+        if self.dist_metric in ["l2", "squared_l2"]:
             if use_batched_version:
                 dist = ((queries[:, None, :] - self.keys[None, :, :]) ** 2).sum(dim=2)  # (N' x 1, D) - (1 x N x D).T -> N' x N x D -> N' x N
             else:
                 dist = torch.stack([((queries[i:i+1, :] - self.keys) ** 2).sum(dim=1) for i in range(len(queries))], dim=0)
             assert dist.shape == (len(queries), len(self.keys)), dist.shape
-            if dist_metric == "l2":
+            if self.dist_metric == "l2":
                 dist = torch.sqrt(dist)
-        elif dist_metric == "cosine":
+        elif self.dist_metric == "cosine":
             queries = torch.nn.functional.normalize(queries, p=2.0, dim=1)  # l2 normalize the query
             if use_batched_version:
                 sim = torch.matmul(queries, self.keys.T)  # (N' x D) x (N x D).T -> N' x N
@@ -340,7 +340,7 @@ class In_Memory_KNN_Dstore(KNN_Dstore):
             assert sim.shape == (len(queries), len(self.keys)), sim.shape
             dist = 1.0 - sim  # cosine distance
         else:
-            raise RuntimeError(f"Unknown distance metric: {dist_metric}")
+            raise RuntimeError(f"Unknown distance metric: {self.dist_metric}")
 
         # Compute nearest neighbors based on the distance
         dist_idx_sorted = torch.argsort(dist, dim=1, descending=False)
@@ -389,8 +389,14 @@ class In_Memory_KNN_Dstore(KNN_Dstore):
 
             # (T_reducedxB)xK
             sim = -dists.cuda()  # negative of the distance can be considered as similarity which softmax needs
-            # TODO: Add a square root for squared l2 distance
             self.negative_distance = sim.detach()  # save for lambda tuning
+            if not self.use_faiss_index:
+                if self.dist_metric == "squared_l2":
+                    self.negative_distance = -torch.sqrt(dists.cuda())  # convert squared l2 to l2
+                elif self.dist_metric == "l2":
+                    pass  # nothing needs to be done
+                else:
+                    raise NotImplementedError(f"Negative distance not implemented for distance metric: {self.dist_metric}")
             probs = utils.log_softmax(sim, dim=-1)
 
             # Remove contribution of indices where the prediction disagrees with the target (only computing perplexity of the target sequence)
