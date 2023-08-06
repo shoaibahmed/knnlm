@@ -329,7 +329,7 @@ class In_Memory_KNN_Dstore(KNN_Dstore):
             else:
                 dist = torch.stack([((queries[i:i+1, :] - self.keys) ** 2).sum(dim=1) for i in range(len(queries))], dim=0)
             assert dist.shape == (len(queries), len(self.keys)), dist.shape
-            if self.dist_metric == "l2":
+            if dist_metric == "l2":
                 dist = torch.sqrt(dist)
         elif dist_metric == "cosine":
             queries = torch.nn.functional.normalize(queries, p=2.0, dim=1)  # l2 normalize the query
@@ -340,7 +340,7 @@ class In_Memory_KNN_Dstore(KNN_Dstore):
             assert sim.shape == (len(queries), len(self.keys)), sim.shape
             dist = 1.0 - sim  # cosine distance
         else:
-            raise RuntimeError(f"Unknown distance metric: {self.dist_metric}")
+            raise RuntimeError(f"Unknown distance metric: {dist_metric}")
 
         # Compute nearest neighbors based on the distance
         dist_idx_sorted = torch.argsort(dist, dim=1, descending=False)
@@ -359,15 +359,15 @@ class In_Memory_KNN_Dstore(KNN_Dstore):
         else:
             queries = queries.to(torch.float32)  # avoid double precision
 
-        if not self.use_tensors_for_faiss:
-            queries = queries.detach().cpu().numpy()  # convert to numpy arrays
         k = min(self.k, len(self.keys))
         if self.use_faiss_index:
+            if not self.use_tensors_for_faiss:
+                queries = queries.detach().cpu().numpy()  # convert to numpy arrays
             selected_dists, nearest_neighbors = self.index.search(queries, k)
+            nearest_neighbors = torch.from_numpy(nearest_neighbors).to(self.device)
+            selected_dists = torch.from_numpy(selected_dists).to(self.device)
         else:
             selected_dists, nearest_neighbors = self.get_nns(queries, k)
-        nearest_neighbors = torch.from_numpy(nearest_neighbors).to(self.device)
-        selected_dists = torch.from_numpy(selected_dists).to(self.device)
         selected_vals = torch.stack([torch.gather(self.values[:, 0], dim=0, index=nearest_neighbors[i, :])
                                     for i in range(nearest_neighbors.shape[0])], dim=0)  # values are tensor of size [N' x 1]
 
@@ -389,6 +389,7 @@ class In_Memory_KNN_Dstore(KNN_Dstore):
 
             # (T_reducedxB)xK
             sim = -dists.cuda()  # negative of the distance can be considered as similarity which softmax needs
+            # TODO: Add a square root for squared l2 distance
             self.negative_distance = sim.detach()  # save for lambda tuning
             probs = utils.log_softmax(sim, dim=-1)
 
