@@ -134,18 +134,26 @@ class In_Memory_KNN_Dstore(KNN_Dstore):
         self.memory_decay_factor = args.memory_decay_factor
         self.lmbda = args.lmbda
         self.use_token_perplexity = args.use_perplexity_mem_strength  # uses target token probability otherwise
-
+        self.use_faiss_index = args.use_faiss_index  # uses direct PyTorch tensors otherwise
         self.only_correct_label_strength_update = True  # memory strength is only updated for nearest neighbors with the correct label
-        self.use_cuda = False
-        self.use_half_prec = False  # FAISS doesn't support half precision keys
-        self.index = None
-        self.index_nprobe = args.probe
-        self.use_gpu_index = True
-        self.use_tensors_for_faiss = False  # Latest FAISS version will directly support PyTorch tensors
 
-        if self.use_gpu_index:
-            self.use_cuda = self.use_tensors_for_faiss
-        print("!! Using GPU FAISS index?", self.use_gpu_index)
+        if self.use_faiss_index:
+            self.use_cuda = False
+            self.use_half_prec = False  # FAISS doesn't support half precision keys
+            self.index = None
+            self.index_nprobe = args.probe
+            self.use_gpu_index = True
+            self.use_tensors_for_faiss = False  # Latest FAISS version will directly support PyTorch tensors
+
+            if self.use_gpu_index:
+                self.use_cuda = self.use_tensors_for_faiss
+            print("!! Using GPU FAISS index?", self.use_gpu_index)
+        else:
+            print("[INFO] Using direct PyTorch tensor computation instead of FAISS index...")
+            self.use_cuda = True
+            self.use_half_prec = True
+            self.dist_metric = "squared_l2"
+
         self.reset_cache()
 
         self.device = torch.device("cuda" if torch.cuda.is_available() and self.use_cuda else "cpu")
@@ -284,6 +292,9 @@ class In_Memory_KNN_Dstore(KNN_Dstore):
         self.decay_memory_strengths()
 
     def update_index(self, model_dim: int = 1024, use_ivf: bool = False) -> None:
+        if not self.use_faiss_index:
+            return
+
         # Supports FAISS-GPU index (https://github.com/facebookresearch/faiss/wiki/Faiss-on-the-GPU)
         # Rebuild the index
         print(f"!! Rebuilding {'GPU' if self.use_gpu_index else 'CPU'}-FAISS index")
@@ -307,6 +318,37 @@ class In_Memory_KNN_Dstore(KNN_Dstore):
         print(f"!! Index creation took {time.time() - start} seconds")
         self.index.nprobe = self.index_nprobe  # nprobe is the number of cells (out of nlist) that are visited to perform a search
 
+    def get_nns(self, queries: torch.Tensor, k: int, use_batched_version: bool = False):
+        assert not self.use_faiss_index
+
+        # self.keys shape: B x D
+        queries = queries.detach().to(self.device)
+        if self.dist_metric in ["l2", "squared_l2"]:
+            if use_batched_version:
+                dist = ((queries[:, None, :] - self.keys[None, :, :]) ** 2).sum(dim=2)  # (N' x 1, D) - (1 x N x D).T -> N' x N x D -> N' x N
+            else:
+                dist = torch.stack([((queries[i:i+1, :] - self.keys) ** 2).sum(dim=1) for i in range(len(queries))], dim=0)
+            assert dist.shape == (len(queries), len(self.keys)), dist.shape
+            if self.dist_metric == "l2":
+                dist = torch.sqrt(dist)
+        elif self.dist_metric == "cosine":
+            queries = torch.nn.functional.normalize(queries, p=2.0, dim=1)  # l2 normalize the query
+            if use_batched_version:
+                sim = torch.matmul(queries, self.keys.T)  # (N' x D) x (N x D).T -> N' x N
+            else:
+                sim = torch.cat([torch.matmul(queries[i:i+1, :], self.keys.T) for i in range(len(queries))], dim=0)  # (1 x D) x (N x D).T -> [1 x N]
+            assert sim.shape == (len(queries), len(self.keys)), sim.shape
+            dist = 1.0 - sim  # cosine distance
+        else:
+            raise RuntimeError(f"Unknown distance metric: {self.dist_metric}")
+
+        # Compute nearest neighbors based on the distance
+        dist_idx_sorted = torch.argsort(dist, dim=1, descending=False)
+
+        nearest_neighbors = dist_idx_sorted[:, :k]  # as distances are sorted in ascending order
+        selected_dists = torch.gather(dist, dim=1, index=nearest_neighbors)
+        return selected_dists, nearest_neighbors
+
     def get_knns(self, queries: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """Batched version is disabled by default as it is super expensive in terms of memory"""
         assert len(queries.shape) == 2, queries.shape
@@ -317,12 +359,15 @@ class In_Memory_KNN_Dstore(KNN_Dstore):
         else:
             queries = queries.to(torch.float32)  # avoid double precision
 
-        if not self.use_tensors_for_faiss:
-            queries = queries.detach().cpu().numpy()  # convert to numpy arrays
         k = min(self.k, len(self.keys))
-        selected_dists, nearest_neighbors = self.index.search(queries, k)
-        nearest_neighbors = torch.from_numpy(nearest_neighbors).to(self.device)
-        selected_dists = torch.from_numpy(selected_dists).to(self.device)
+        if self.use_faiss_index:
+            if not self.use_tensors_for_faiss:
+                queries = queries.detach().cpu().numpy()  # convert to numpy arrays
+            selected_dists, nearest_neighbors = self.index.search(queries, k)
+            nearest_neighbors = torch.from_numpy(nearest_neighbors).to(self.device)
+            selected_dists = torch.from_numpy(selected_dists).to(self.device)
+        else:
+            selected_dists, nearest_neighbors = self.get_nns(queries, k)
         selected_vals = torch.stack([torch.gather(self.values[:, 0], dim=0, index=nearest_neighbors[i, :])
                                     for i in range(nearest_neighbors.shape[0])], dim=0)  # values are tensor of size [N' x 1]
 
@@ -345,6 +390,13 @@ class In_Memory_KNN_Dstore(KNN_Dstore):
             # (T_reducedxB)xK
             sim = -dists.cuda()  # negative of the distance can be considered as similarity which softmax needs
             self.negative_distance = sim.detach()  # save for lambda tuning
+            if not self.use_faiss_index:
+                if self.dist_metric == "squared_l2":
+                    self.negative_distance = -torch.sqrt(dists.cuda())  # convert squared l2 to l2
+                elif self.dist_metric == "l2":
+                    pass  # nothing needs to be done
+                else:
+                    raise NotImplementedError(f"Negative distance not implemented for distance metric: {self.dist_metric}")
             probs = utils.log_softmax(sim, dim=-1)
 
             # Remove contribution of indices where the prediction disagrees with the target (only computing perplexity of the target sequence)

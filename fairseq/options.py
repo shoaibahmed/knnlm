@@ -503,6 +503,8 @@ def add_eval_lm_args(parser):
                        help='dynamically tune lambda for deciding the weight to put on the probs from the non-parametric memory')
     group.add_argument('--use-max-weight-lmbda', action='store_true',
                        help='use max weight for dynamically tuning lambda value (uses mean otherwise)')
+    group.add_argument('--use-faiss-index', action='store_true',
+                       help='use FAISS index for search (uses direct PyTorch functions otherwise)')
     group.add_argument('--shuffle-dataset', action='store_true',
                        help='shuffle dataset before constructing datastore -- important for adaptive memory in general')
     group.add_argument('--adaptive-mem-log-prob-thresh', default=None, type=float,
