@@ -114,21 +114,26 @@ class SequenceScorer(object):
                     probs = probs.half()
 
                 mask = None
-                if self.args.use_adaptive_lmbda:
-                    negative_distance = dstore.get_negative_distance()  # num_tokens x num nearest neighbors
-                    if negative_distance is not None:
-                        weights = torch.exp(negative_distance)  # exponential of negative distance is bounded between 0 and 1
-                        if self.args.use_max_weight_lmbda:
-                            lmbda = torch.max(weights, axis=1).values  # num_tokens
-                        else:
-                            lmbda = torch.mean(weights, axis=1)  # num_tokens
-                        print(f"!! Adaptive lambda value ({'max' if self.args.use_max_weight_lmbda else 'mean'}): {lmbda}")
-                        mask = orig_target != self.pad  # since nearest neighbor values are only saved for non-padded tokens
-                    else:  # none for the first round when the datastore is empty
-                        lmbda = self.args.lmbda
-                        print(f"!! Adaptive lambda value ({'max' if self.args.use_max_weight_lmbda else 'mean'}) set to the default lambda value as distance is none: {lmbda}")
+                # TODO: Return this adaptive lambda value such that this can be passed to the update memory strengths method
+                if 'lambda_network' in kwargs and kwargs['lambda_network'] is not None:
+                    raise NotImplementedError
+                    mask = orig_target != self.pad  # since nearest neighbor values are only saved for non-padded tokens
                 else:
-                    lmbda = self.args.lmbda
+                    if self.args.use_adaptive_lmbda:
+                        negative_distance = dstore.get_negative_distance()  # num_tokens x num nearest neighbors
+                        if negative_distance is not None:
+                            weights = torch.exp(negative_distance)  # exponential of negative distance is bounded between 0 and 1
+                            if self.args.use_max_weight_lmbda:
+                                lmbda = torch.max(weights, axis=1).values  # num_tokens
+                            else:
+                                lmbda = torch.mean(weights, axis=1)  # num_tokens
+                            print(f"!! Adaptive lambda value ({'max' if self.args.use_max_weight_lmbda else 'mean'}): {lmbda}")
+                            mask = orig_target != self.pad  # since nearest neighbor values are only saved for non-padded tokens
+                        else:  # none for the first round when the datastore is empty
+                            lmbda = self.args.lmbda
+                            print(f"!! Adaptive lambda value ({'max' if self.args.use_max_weight_lmbda else 'mean'}) set to the default lambda value as distance is none: {lmbda}")
+                    else:
+                        lmbda = self.args.lmbda
                 probs = combine_knn_and_vocab_probs(
                             yhat_knn_prob, probs, lmbda, mask=mask)
 

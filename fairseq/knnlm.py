@@ -233,7 +233,8 @@ class In_Memory_KNN_Dstore(KNN_Dstore):
         # Increment the memory life counter
         self.memory_life += 1
 
-    def update_memory_strengths(self, token_log_probs: torch.Tensor) -> None:
+    def update_memory_strengths(self, token_log_probs: torch.Tensor, lambda_val: torch.Tensor = None) -> None:
+        """lambda_val should be specified for adaptive lambda"""
         # Update here the strengths for the nearest neighbors based on their contribution in reducing the perplexity
         if self.last_nearest_neighbors is None:
             return
@@ -249,7 +250,8 @@ class In_Memory_KNN_Dstore(KNN_Dstore):
         if not self.use_token_perplexity:  # token importance is the inverse of the probability assigned to the correct label
             token_importance = 1. - token_importance
         for i in range(len(token_log_probs)):
-            tgt_label_contrib = self.lmbda * token_importance[i] * self.last_nearest_neighbor_probs[i, :]  # weight the token importance by the nearest neighbor contribution as well as the lambda val
+            current_lambda = self.lmbda if lambda_val is None else float(lambda_val[i])
+            tgt_label_contrib = current_lambda * token_importance[i] * self.last_nearest_neighbor_probs[i, :]  # weight the token importance by the nearest neighbor contribution as well as the lambda val
             self.memory_strengths[self.last_nearest_neighbors[i, :]] += tgt_label_contrib  # upweight memory strength
 
     def decay_memory_strengths(self) -> None:
