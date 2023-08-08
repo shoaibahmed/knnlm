@@ -294,8 +294,10 @@ def main_adaptive(parsed_args):
         knn_dstore.load_datastore(args.existing_datastore_path, args.freeze_loaded_memories)
 
     lambda_network = None
+    optimizer = None
     if args.use_learnable_lmbda:
         lambda_network = LambdaNetwork()  # instantiate with default params from selective memorization paper
+        optimizer = torch.optim.Adam(lr=3e-4, weight_decay=1e-4)
         raise NotImplementedError
 
     with progress_bar.build_progress_bar(args, itr) as t:
@@ -309,7 +311,7 @@ def main_adaptive(parsed_args):
             gen_timer.start()
             hypos = scorer.generate(models, sample, knn_dstore=knn_dstore, lambda_network=lambda_network)
             full_pos_scores = torch.cat([x[0]['positional_scores'] for x in hypos], dim=0)  # flattened
-            knn_dstore.update_memory_strengths(full_pos_scores)  # update the strength of the kNN memories
+            knn_dstore.update_memory_strengths(full_pos_scores, scorer.last_lambda_vals)  # update the strength of the kNN memories (last lambda val is None for fixed lambda)
             gen_timer.stop(sample['ntokens'])
 
             key_dtype = np.float16 if args.dstore_fp16 else np.float32

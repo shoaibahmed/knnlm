@@ -22,6 +22,7 @@ class SequenceScorer(object):
         assert self.softmax_batch > 0
         self.compute_alignment = compute_alignment
         self.args = args
+        self.last_lambda_vals = None
 
     @torch.no_grad()
     def generate(self, models, sample, **kwargs):
@@ -114,10 +115,12 @@ class SequenceScorer(object):
                     probs = probs.half()
 
                 mask = None
+                self.last_lambda_vals = None
                 # TODO: Return this adaptive lambda value such that this can be passed to the update memory strengths method
                 if 'lambda_network' in kwargs and kwargs['lambda_network'] is not None:
                     raise NotImplementedError
                     mask = orig_target != self.pad  # since nearest neighbor values are only saved for non-padded tokens
+                    self.last_lambda_vals = lmbda.detach()
                 else:
                     if self.args.use_adaptive_lmbda:
                         negative_distance = dstore.get_negative_distance()  # num_tokens x num nearest neighbors
@@ -129,6 +132,7 @@ class SequenceScorer(object):
                                 lmbda = torch.mean(weights, axis=1)  # num_tokens
                             print(f"!! Adaptive lambda value ({'max' if self.args.use_max_weight_lmbda else 'mean'}): {lmbda}")
                             mask = orig_target != self.pad  # since nearest neighbor values are only saved for non-padded tokens
+                            self.last_lambda_vals = lmbda.detach()
                         else:  # none for the first round when the datastore is empty
                             lmbda = self.args.lmbda
                             print(f"!! Adaptive lambda value ({'max' if self.args.use_max_weight_lmbda else 'mean'}) set to the default lambda value as distance is none: {lmbda}")
