@@ -297,7 +297,7 @@ def main_adaptive(parsed_args):
     optimizer = None
     if args.use_learnable_lmbda:
         lambda_network = LambdaNetwork()  # instantiate with default params from selective memorization paper
-        optimizer = torch.optim.Adam(lr=3e-4, weight_decay=1e-4)
+        optimizer = torch.optim.Adam(lambda_network.parameters(), lr=3e-4, weight_decay=1e-4)
         raise NotImplementedError
 
     with progress_bar.build_progress_bar(args, itr) as t:
