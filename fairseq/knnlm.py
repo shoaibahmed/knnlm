@@ -144,6 +144,7 @@ class In_Memory_KNN_Dstore(KNN_Dstore):
             self.index_nprobe = args.probe
             self.use_gpu_index = True
             self.use_tensors_for_faiss = False  # Latest FAISS version will directly support PyTorch tensors
+            self.use_ivf_index = False
 
             if self.use_gpu_index:
                 self.use_cuda = self.use_tensors_for_faiss
@@ -293,7 +294,7 @@ class In_Memory_KNN_Dstore(KNN_Dstore):
         # Update memory strengths due to decay
         self.decay_memory_strengths()
 
-    def update_index(self, model_dim: int = 1024, use_ivf: bool = False) -> None:
+    def update_index(self, model_dim: int = 1024) -> None:
         if not self.use_faiss_index:
             return
 
@@ -310,7 +311,7 @@ class In_Memory_KNN_Dstore(KNN_Dstore):
         else:
             self.index = faiss.IndexFlatL2(model_dim)       # build the index
 
-        if use_ivf:
+        if self.use_ivf_index:
             print("!! Training IVF index")
             nlist = 128  # the number of cells
             self.index = faiss.IndexIVFFlat(self.index, model_dim, nlist)
@@ -368,6 +369,10 @@ class In_Memory_KNN_Dstore(KNN_Dstore):
             selected_dists, nearest_neighbors = self.index.search(queries, k)
             nearest_neighbors = torch.from_numpy(nearest_neighbors).to(self.device)
             selected_dists = torch.from_numpy(selected_dists).to(self.device)
+            if self.use_ivf_index:
+                mask = nearest_neighbors >= 0  # discard blank indices -- returned as -1 as ivf searches only in a limited number of bins
+                nearest_neighbors = nearest_neighbors[mask]
+                selected_dists = selected_dists[mask]
         else:
             selected_dists, nearest_neighbors = self.get_nns(queries, k)
         selected_vals = torch.stack([torch.gather(self.values[:, 0], dim=0, index=nearest_neighbors[i, :])
@@ -399,6 +404,8 @@ class In_Memory_KNN_Dstore(KNN_Dstore):
                     pass  # nothing needs to be done
                 else:
                     raise NotImplementedError(f"Negative distance not implemented for distance metric: {self.dist_metric}")
+            else:
+                sim = -(dists.cuda() ** 2)  # FAISS returns L2 distances, but kNN-LM uses squared L2 (negate again after squaring)
             probs = utils.log_softmax(sim, dim=-1)
 
             # Remove contribution of indices where the prediction disagrees with the target (only computing perplexity of the target sequence)
