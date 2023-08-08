@@ -171,13 +171,6 @@ class LambdaNetwork(torch.nn.Module):
 
         self.optimizer = torch.optim.Adam(self.parameters(), lr=3e-4, weight_decay=1e-4)
 
-    def update_model(self, combined_target_log_probs):
-        self.optimizer.zero_grad()
-        loss = (-combined_target_log_probs).sum()  # negative log-likelihood
-        loss.backward()
-        self.optimizer.update()
-        print(f"!! Model loss: {float(loss)}")
-
     def forward(self, contextual_rep: torch.Tensor, lm_log_probs: torch.Tensor,
                 knn_dist: torch.Tensor) -> torch.Tensor:
         assert len(contextual_rep.shape) == 2, contextual_rep.shape  # (B x T) x D'
@@ -201,8 +194,12 @@ class LambdaNetwork(torch.nn.Module):
         logit = self.model(concat_embed)
         return torch.nn.functional.sigmoid(logit)  # apply sigmoid to the output
 
-    def update(self, optimizer):
-        raise NotImplementedError
+    def update_model(self, combined_target_log_probs):
+        self.optimizer.zero_grad()
+        loss = (-combined_target_log_probs).sum()  # negative log-likelihood
+        loss.backward()
+        self.optimizer.update()
+        print(f"!! Model loss: {float(loss)}")
 
 
 def main_adaptive(parsed_args):
@@ -304,6 +301,7 @@ def main_adaptive(parsed_args):
 
     lambda_network = None
     if args.use_learnable_lmbda:
+        print("!! Using learnable lambda...")
         lambda_network = LambdaNetwork()  # instantiate with default params from selective memorization paper
 
     with progress_bar.build_progress_bar(args, itr) as t:

@@ -116,9 +116,12 @@ class SequenceScorer(object):
 
                 mask = None
                 self.last_lambda_vals = None
-                # TODO: Return this adaptive lambda value such that this can be passed to the update memory strengths method
-                if 'lambda_network' in kwargs and kwargs['lambda_network'] is not None:
-                    raise NotImplementedError
+                learnable_lambda = 'lambda_network' in kwargs and kwargs['lambda_network'] is not None
+                if learnable_lambda:
+                    distance = -dstore.get_negative_distance()  # num_tokens x num nearest neighbors
+                    assert len(distance.shape) == 2, distance.shape
+                    distance = distance[:, :10]  # top 10 nearest neighbor distances
+                    lmbda = kwargs['lambda_network'](queries, probs, distance)
                     mask = orig_target != self.pad  # since nearest neighbor values are only saved for non-padded tokens
                     self.last_lambda_vals = lmbda.detach()
                 else:
@@ -140,6 +143,10 @@ class SequenceScorer(object):
                         lmbda = self.args.lmbda
                 probs = combine_knn_and_vocab_probs(
                             yhat_knn_prob, probs, lmbda, mask=mask)
+
+                if learnable_lambda:  # Update the lambda network
+                    # TODO: integrate learnable lambda inference mode
+                    lmbda = kwargs['lambda_network'].update_model(probs)
 
             if avg_probs is None:
                 avg_probs = probs
