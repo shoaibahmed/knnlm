@@ -169,6 +169,15 @@ class LambdaNetwork(torch.nn.Module):
         self.projection_networks["lm_entropy"] = torch.nn.Linear(1, hidden_dim)
         self.projection_networks["l2_distance_qk"] = torch.nn.Linear(10, hidden_dim)
 
+        self.optimizer = torch.optim.Adam(self.parameters(), lr=3e-4, weight_decay=1e-4)
+
+    def update_model(self, combined_target_log_probs):
+        self.optimizer.zero_grad()
+        loss = (-combined_target_log_probs).sum()  # negative log-likelihood
+        loss.backward()
+        self.optimizer.update()
+        print(f"!! Model loss: {float(loss)}")
+
     def forward(self, contextual_rep: torch.Tensor, lm_log_probs: torch.Tensor,
                 knn_dist: torch.Tensor) -> torch.Tensor:
         assert len(contextual_rep.shape) == 2, contextual_rep.shape  # (B x T) x D'
@@ -294,11 +303,8 @@ def main_adaptive(parsed_args):
         knn_dstore.load_datastore(args.existing_datastore_path, args.freeze_loaded_memories)
 
     lambda_network = None
-    optimizer = None
     if args.use_learnable_lmbda:
         lambda_network = LambdaNetwork()  # instantiate with default params from selective memorization paper
-        optimizer = torch.optim.Adam(lambda_network.parameters(), lr=3e-4, weight_decay=1e-4)
-        raise NotImplementedError
 
     with progress_bar.build_progress_bar(args, itr) as t:
         wps_meter = TimeMeter()
