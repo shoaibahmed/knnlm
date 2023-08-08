@@ -180,7 +180,7 @@ class In_Memory_KNN_Dstore(KNN_Dstore):
 
             if self.adaptive_mem_log_prob_thresh is not None:
                 prev_size = len(k)
-                important_mems = (token_log_probs < self.adaptive_mem_log_prob_thresh).to(self.device)  # the log-prob is lower than sigma
+                important_mems = (token_log_probs < self.adaptive_mem_log_prob_thresh).to(k.device)  # the log-prob is lower than sigma
                 k = k[important_mems]
                 v = v[important_mems]
                 token_log_probs = token_log_probs[important_mems].float()
