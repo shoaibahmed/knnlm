@@ -161,7 +161,7 @@ class LambdaNetwork(torch.nn.Module):
         for i in range(n_layers-1):
             layer_list += [torch.nn.Linear(input_dim if i == 0 else hidden_dim, hidden_dim), non_lin()]
         layer_list += [torch.nn.Linear(hidden_dim, 1)]  # output dim is 1
-        self.model = torch.nn.Sequential(layer_list)
+        self.model = torch.nn.Sequential(*layer_list)
 
         self.projection_networks = torch.nn.ModuleDict()
         self.projection_networks["contextual_rep"] = torch.nn.Linear(model_dim, hidden_dim)

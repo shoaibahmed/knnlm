@@ -118,12 +118,18 @@ class SequenceScorer(object):
                 self.last_lambda_vals = None
                 learnable_lambda = 'lambda_network' in kwargs and kwargs['lambda_network'] is not None
                 if learnable_lambda:
-                    distance = -dstore.get_negative_distance()  # num_tokens x num nearest neighbors
-                    assert len(distance.shape) == 2, distance.shape
-                    distance = distance[:, :10]  # top 10 nearest neighbor distances
-                    lmbda = kwargs['lambda_network'](queries, probs, distance)
-                    mask = orig_target != self.pad  # since nearest neighbor values are only saved for non-padded tokens
-                    self.last_lambda_vals = lmbda.detach()
+                    neg_distance = dstore.get_negative_distance()  # num_tokens x num nearest neighbors
+                    if neg_distance is not None:
+                        distance = -neg_distance
+                        assert len(distance.shape) == 2, distance.shape
+                        distance = distance[:, :10]  # top 10 nearest neighbor distances
+                        lmbda = kwargs['lambda_network'](queries, probs, distance)
+                        mask = orig_target != self.pad  # since nearest neighbor values are only saved for non-padded tokens
+                        self.last_lambda_vals = lmbda.detach()
+                        print(f"!! Learned lambda value: {lmbda}")
+                    else:  # none for the first round when the datastore is empty
+                        lmbda = self.args.lmbda
+                        print(f"!! Learned lambda value set to the default lambda value as distance is none: {lmbda}")
                 else:
                     if self.args.use_adaptive_lmbda:
                         negative_distance = dstore.get_negative_distance()  # num_tokens x num nearest neighbors
