@@ -172,11 +172,17 @@ class LambdaNetwork(torch.nn.Module):
         self.optimizer = torch.optim.Adam(self.parameters(), lr=3e-4, weight_decay=1e-4)
 
     def forward(self, contextual_rep: torch.Tensor, lm_log_probs: torch.Tensor,
-                knn_dist: torch.Tensor) -> torch.Tensor:
+                knn_dist: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
+        # TODO: Validate that all shapes correctly match
+        contextual_rep = contextual_rep[mask] # .reshape(-1, contextual_rep.shape[2])  # (B x T') x D'
+        lm_log_probs = lm_log_probs[mask.permute(1, 0)]  # (B x T') x K
+        print("Contextual rep:", contextual_rep.shape)
+        print("LM log probs:", lm_log_probs.shape)
+        print("kNN dist:", knn_dist.shape)
         assert len(contextual_rep.shape) == 2, contextual_rep.shape  # (B x T) x D'
         assert contextual_rep.shape[1] == self.model_dim
         assert len(lm_log_probs.shape) == 2, lm_log_probs.shape      # (B x T) x K
-        assert len(knn_dist.shape) == 2, knn_dist.shape                      # (B x T) x 10
+        assert len(knn_dist.shape) == 2, knn_dist.shape              # (B x T) x 10
         assert knn_dist.shape[1] == 10, knn_dist.shape
 
         lm_probs = torch.exp(lm_log_probs)
@@ -198,7 +204,7 @@ class LambdaNetwork(torch.nn.Module):
         self.optimizer.zero_grad()
         loss = (-combined_target_log_probs).sum()  # negative log-likelihood
         loss.backward()
-        self.optimizer.update()
+        self.optimizer.step()
         print(f"!! Model loss: {float(loss)}")
 
 
@@ -302,7 +308,8 @@ def main_adaptive(parsed_args):
     lambda_network = None
     if args.use_learnable_lmbda:
         print("!! Using learnable lambda...")
-        lambda_network = LambdaNetwork()  # instantiate with default params from selective memorization paper
+        device = torch.device("cuda" if torch.cuda.is_available else "cpu")
+        lambda_network = LambdaNetwork().to(device)  # instantiate with default params from selective memorization paper
 
     with progress_bar.build_progress_bar(args, itr) as t:
         wps_meter = TimeMeter()
