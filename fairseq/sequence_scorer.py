@@ -134,7 +134,7 @@ class SequenceScorer(object):
                             print(f"!! Learned lambda value: {lmbda}")
                         else:  # none for the first round when the datastore is empty
                             lmbda = self.args.lmbda
-                            print(f"!! Learned lambda value set to the default lambda value as distance is none: {lmbda}")
+                            print(f"!! Learned lambda value set to the default lambda value for the warmup phase: {lmbda}")
                     else:
                         if self.args.use_adaptive_lmbda:
                             negative_distance = dstore.get_negative_distance()  # num_tokens x num nearest neighbors
