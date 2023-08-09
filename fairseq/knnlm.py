@@ -376,8 +376,12 @@ class In_Memory_KNN_Dstore(KNN_Dstore):
         else:
             selected_dists, nearest_neighbors = self.get_nns(queries, k)
         selected_vals = torch.stack([torch.gather(self.values[:, 0], dim=0, index=nearest_neighbors[i, :])
-                                    for i in range(nearest_neighbors.shape[0])], dim=0)  # values are tensor of size [N' x 1]
+                                     for i in range(nearest_neighbors.shape[0])], dim=0)  # values are tensor of size [N' x 1]
 
+        selected_mem_life = torch.stack([torch.gather(self.memory_life, dim=0, index=nearest_neighbors[i, :])
+                                         for i in range(nearest_neighbors.shape[0])], dim=0)  # values are tensor of size [N' x 1]
+        print(f"!! Retrieved nearest neighbors / Distance: (min: {torch.min(selected_dists):.2f}, mean: {torch.mean(selected_dists):.2f}, max: {torch.max(selected_dists):.2f})", end='')
+        print(f" / Nearest neighbors memory life: (min: {torch.min(selected_mem_life):.2f}, mean: {torch.mean(selected_mem_life.float()):.2f}, max: {torch.max(selected_mem_life):.2f})")
         return nearest_neighbors, selected_dists, selected_vals
 
     def get_knn_log_prob(self, queries: torch.Tensor, tgt: torch.Tensor, pad_idx: int) -> torch.Tensor:
