@@ -198,11 +198,11 @@ class LambdaNetwork(torch.nn.Module):
         # Concatenate the embeddings for the final model
         concat_embed = torch.cat([contextual_rep_embed, lm_confidence_embed, lm_entropy_embed, knn_dist_embed], dim=1)
         logit = self.model(concat_embed)
-        return torch.nn.functional.sigmoid(logit)  # apply sigmoid to the output
+        return torch.sigmoid(logit)  # apply sigmoid to the output
 
     def update_model(self, combined_target_log_probs):
         self.optimizer.zero_grad()
-        loss = (-combined_target_log_probs).sum()  # negative log-likelihood
+        loss = (-combined_target_log_probs).mean()  # negative log-likelihood
         loss.backward()
         self.optimizer.step()
         print(f"!! Model loss: {float(loss)}")

@@ -23,6 +23,7 @@ class SequenceScorer(object):
         self.compute_alignment = compute_alignment
         self.args = args
         self.last_lambda_vals = None
+        self.steps = 0
 
     @torch.no_grad()
     def generate(self, models, sample, **kwargs):
@@ -120,15 +121,16 @@ class SequenceScorer(object):
                 with torch.set_grad_enabled(learnable_lambda):
                     if learnable_lambda:
                         neg_distance = dstore.get_negative_distance()  # num_tokens x num nearest neighbors
-                        if neg_distance is not None:
+                        if self.steps > self.args.lambda_network_warmup_steps and neg_distance is not None:
                             mask = orig_target != self.pad  # since nearest neighbor values are only saved for non-padded tokens
                             distance = -neg_distance
                             assert len(distance.shape) == 2, distance.shape
                             distance = distance[:, :10]  # top 10 nearest neighbor distances
                             # use current probs instead of probs which are target prob (current prob shape: [1, 1024, V])
                             lmbda = kwargs['lambda_network'](queries.float(), curr_prob.reshape(*sample['target'].shape, -1).float(),
-                                                            distance, mask.permute(1, 0)).squeeze(1)
-                            self.last_lambda_vals = lmbda.detach()
+                                                             distance, mask.permute(1, 0)).squeeze(1)
+                            eps = 0.01
+                            self.last_lambda_vals = torch.clamp(lmbda.detach() + eps, 0., 1.)
                             print(f"!! Learned lambda value: {lmbda}")
                         else:  # none for the first round when the datastore is empty
                             lmbda = self.args.lmbda
@@ -154,8 +156,12 @@ class SequenceScorer(object):
                                 yhat_knn_prob, probs, lmbda, mask=mask)
 
                     if learnable_lambda and self.last_lambda_vals is not None:  # Update the lambda network
-                        # TODO: integrate learnable lambda inference mode
-                        kwargs['lambda_network'].update_model(probs)
+                        if self.steps > self.args.lambda_network_warmup_steps and \
+                            self.steps % self.args.lambda_network_update_steps == self.args.lambda_network_update_steps - 1:
+                            # TODO: integrate learnable lambda inference mode
+                            kwargs['lambda_network'].update_model(probs)
+                        else:
+                            probs = probs.detach()
 
             if avg_probs is None:
                 avg_probs = probs
@@ -205,4 +211,5 @@ class SequenceScorer(object):
                 'positional_scores': avg_probs_i,
                 'dstore_keys': decoder_out[1][self.args.knn_keytype][start_idxs[i]:,i,:] if self.args.save_knnlm_dstore else None,
             }])
+        self.steps += 1
         return hypos
