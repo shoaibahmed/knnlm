@@ -505,10 +505,12 @@ def add_eval_lm_args(parser):
                        help='use max weight for dynamically tuning lambda value (uses mean otherwise)')
     group.add_argument('--use-learnable-lmbda', action='store_true',
                        help='train a network to output lambda value (mostly using selective memorization paper)')
-    group.add_argument('--lambda-network-update-steps', default=10, type=int,
-                       help='update the learnable network once in the defined number of steps (defaults to 10)')
-    group.add_argument('--lambda-network-warmup-steps', default=1000, type=int,
-                       help='start updating the learnable network only defined number of steps (defaults to 1000)')
+    group.add_argument('--optimize-beta', action='store_true',
+                       help='optimize beta instead of lambda for the network which multiplies the negative distances in RBF')
+    group.add_argument('--lambda-network-update-steps', default=1, type=int,
+                       help='update the learnable network once in the defined number of steps (defaults to 1)')
+    group.add_argument('--lambda-network-warmup-steps', default=0, type=int,
+                       help='start updating the learnable network only defined number of steps (defaults to 0)')
     group.add_argument('--use-faiss-index', action='store_true',
                        help='use FAISS index for search (uses direct PyTorch functions otherwise)')
     group.add_argument('--shuffle-dataset', action='store_true',

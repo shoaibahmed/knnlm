@@ -143,9 +143,10 @@ class InMemoryDataStore:
 
 
 class LambdaNetwork(torch.nn.Module):
-    def __init__(self, n_layers: int = 4, model_dim: int = 1024, hidden_dim: int = 128,
+    def __init__(self, optimize_beta: bool, n_layers: int = 4, model_dim: int = 1024, hidden_dim: int = 128,
                  projection_size: int = 128, non_lin: torch.nn.Module = torch.nn.ReLU) -> None:
         """
+        optimize beta assumes that the output is real valued scalar
         Feature list:
             1. contextualized context representation (x)
             2. Confidence of LM i.e., max_y p(y | x; w)
@@ -170,6 +171,7 @@ class LambdaNetwork(torch.nn.Module):
         self.projection_networks["l2_distance_qk"] = torch.nn.Linear(10, hidden_dim)
 
         self.optimizer = torch.optim.Adam(self.parameters(), lr=3e-4, weight_decay=1e-4)
+        self.optimize_beta = optimize_beta
 
     def forward(self, contextual_rep: torch.Tensor, lm_log_probs: torch.Tensor,
                 knn_dist: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
@@ -198,7 +200,11 @@ class LambdaNetwork(torch.nn.Module):
         # Concatenate the embeddings for the final model
         concat_embed = torch.cat([contextual_rep_embed, lm_confidence_embed, lm_entropy_embed, knn_dist_embed], dim=1)
         logit = self.model(concat_embed)
-        return torch.sigmoid(logit)  # apply sigmoid to the output
+
+        if self.optimize_beta:
+            return 1 + logit  # 1 is a constant bias
+        else:
+            return torch.sigmoid(logit).squeeze(1)  # apply sigmoid to the output
 
     def update_model(self, combined_target_log_probs):
         self.optimizer.zero_grad()
@@ -309,7 +315,7 @@ def main_adaptive(parsed_args):
     if args.use_learnable_lmbda:
         print("!! Using learnable lambda...")
         device = torch.device("cuda" if torch.cuda.is_available else "cpu")
-        lambda_network = LambdaNetwork().to(device)  # instantiate with default params from selective memorization paper
+        lambda_network = LambdaNetwork(args.optimize_beta).to(device)  # instantiate with default params from selective memorization paper
 
     with progress_bar.build_progress_bar(args, itr) as t:
         wps_meter = TimeMeter()
