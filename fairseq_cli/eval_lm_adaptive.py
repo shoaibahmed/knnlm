@@ -206,10 +206,12 @@ class LambdaNetwork(torch.nn.Module):
         else:
             return torch.sigmoid(logit).squeeze(1)  # apply sigmoid to the output
 
-    def update_model(self, combined_target_log_probs):
+    def update_model(self, combined_target_log_probs, clip_grad=None):
         self.optimizer.zero_grad()
         loss = (-combined_target_log_probs).mean()  # negative log-likelihood
         loss.backward()
+        if clip_grad is not None:
+            torch.nn.utils.clip_grad_norm_(self.parameters(), clip_grad)
         self.optimizer.step()
         print(f"!! Model loss: {float(loss)}")
 

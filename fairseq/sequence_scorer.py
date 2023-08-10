@@ -97,6 +97,10 @@ class SequenceScorer(object):
                     idx = end
                 sample['target'] = orig_target
 
+            # Current probs are of shape: [1, BxT, V] where V is the size of the vocabulary
+            # Probs are of shape: [1, BxT, 1] since only the probs for the target label are selected
+            # Labels are of size [B, T] -- many of them are padded labels
+            # Reshaping it converts it to size (B, T)
             probs = probs.view(sample['target'].shape)
 
             if 'knn_dstore' in kwargs:
@@ -106,6 +110,7 @@ class SequenceScorer(object):
                 if len(models) != 1:
                     raise ValueError('Only knn *log* probs are supported.')
 
+                # Permute the targets (to match the queries), and permute back the outputs from the kNN-LM
                 yhat_knn_prob = dstore.get_knn_log_prob(
                         queries,
                         orig_target.permute(1, 0),
@@ -126,7 +131,7 @@ class SequenceScorer(object):
                             distance = -negative_distance
                             assert len(distance.shape) == 2, distance.shape
                             distance = distance[:, :10]  # top 10 nearest neighbor distances
-                            # use current probs instead of probs which are target prob (current prob shape: [1, 1024, V])
+                            # use current probs instead of probs which are target prob (current prob shape: [1, BxT, V])
                             lmbda = kwargs['lambda_network'](queries.float(), curr_prob.reshape(*sample['target'].shape, -1).float(),
                                                              distance, mask.permute(1, 0))
 
