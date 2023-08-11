@@ -147,14 +147,14 @@ class SequenceScorer(object):
                                     lmbda = torch.max(weights, axis=1).values  # num_tokens
                                 else:
                                     lmbda = torch.mean(weights, axis=1)  # num_tokens
-                                print(f"!! Adaptive lambda value ({'max' if self.args.use_max_weight_lmbda else 'mean'}) with learned beta: {lmbda}")
+                                print(f"!! Adaptive lambda value ({'max' if self.args.use_max_weight_lmbda else 'mean'}) with learned beta / min: {torch.min(lmbda):.4f} / mean: {torch.mean(lmbda):.4f} / max: {torch.max(lmbda):.4f}")
                                 mask = orig_target != self.pad  # since nearest neighbor values are only saved for non-padded tokens
                             else:
                                 use_eps = True  # to avoid numerical instability due to eps close to zero (log becomes inf)
                                 if use_eps:
                                     eps = 0.001
                                     lmbda = torch.clamp(lmbda + eps, 0., 1.)
-                                print(f"!! Learned lambda value: {lmbda}")
+                                print(f"!! Learned lambda value / min: {torch.min(lmbda):.4f} / mean: {torch.mean(lmbda):.4f} / max: {torch.max(lmbda):.4f}")
                             self.last_lambda_vals = lmbda.detach()
                         else:  # none for the first round when the datastore is empty
                             lmbda = self.args.lmbda
@@ -168,7 +168,7 @@ class SequenceScorer(object):
                                     lmbda = torch.max(weights, axis=1).values  # num_tokens
                                 else:
                                     lmbda = torch.mean(weights, axis=1)  # num_tokens
-                                print(f"!! Adaptive lambda value ({'max' if self.args.use_max_weight_lmbda else 'mean'}): {lmbda}")
+                                print(f"!! Adaptive lambda value ({'max' if self.args.use_max_weight_lmbda else 'mean'}) / min: {torch.min(lmbda):.4f} / mean: {torch.mean(lmbda):.4f} / max: {torch.max(lmbda):.4f}")
                                 mask = orig_target != self.pad  # since nearest neighbor values are only saved for non-padded tokens
                                 self.last_lambda_vals = lmbda.detach()
                             else:  # none for the first round when the datastore is empty
