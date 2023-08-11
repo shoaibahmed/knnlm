@@ -501,6 +501,8 @@ def add_eval_lm_args(parser):
                        help='dynamically decide which items to store in the non-parametric memory')
     group.add_argument('--use-adaptive-lmbda', action='store_true',
                        help='dynamically tune lambda for deciding the weight to put on the probs from the non-parametric memory')
+    group.add_argument('--rbf-beta', default=1.0, type=float,
+                       help='beta value that is multiplied with the distance in the RBF formulation (defaults to 1)')
     group.add_argument('--use-max-weight-lmbda', action='store_true',
                        help='use max weight for dynamically tuning lambda value (uses mean otherwise)')
     group.add_argument('--use-learnable-lmbda', action='store_true',
