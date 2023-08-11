@@ -111,6 +111,7 @@ class SequenceScorer(object):
                     raise ValueError('Only knn *log* probs are supported.')
 
                 # Permute the targets (to match the queries), and permute back the outputs from the kNN-LM
+                # queries are: TxBxC / targets are: BxT
                 yhat_knn_prob = dstore.get_knn_log_prob(
                         queries,
                         orig_target.permute(1, 0),
@@ -131,9 +132,12 @@ class SequenceScorer(object):
                             distance = -negative_distance
                             assert len(distance.shape) == 2, distance.shape
                             distance = distance[:, :10]  # top 10 nearest neighbor distances
-                            # use current probs instead of probs which are target prob (current prob shape: [1, BxT, V])
-                            lmbda = kwargs['lambda_network'](queries.float(), curr_prob.reshape(*sample['target'].shape, -1).float(),
-                                                             distance, mask.permute(1, 0))
+
+                            # Use current probs instead of probs which are target prob (current prob shape: [1, BxT, V])
+                            # Queries are of shape: TxBxC, so is misaligned with everything else -- permute first
+                            reshaped_probs = curr_prob.reshape(*sample['target'].shape, -1).float()
+                            lmbda = kwargs['lambda_network'](queries.permute(1, 0, 2).float(), reshaped_probs,
+                                                             distance, mask)
 
                             if kwargs['lambda_network'].optimize_beta:
                                 beta = lmbda
@@ -172,6 +176,8 @@ class SequenceScorer(object):
                                 print(f"!! Adaptive lambda value ({'max' if self.args.use_max_weight_lmbda else 'mean'}) set to the default lambda value as distance is none: {lmbda}")
                         else:
                             lmbda = self.args.lmbda
+
+                    # Combine the LM and kNN probs
                     probs = combine_knn_and_vocab_probs(
                                 yhat_knn_prob, probs, lmbda, mask=mask)
 
@@ -180,8 +186,7 @@ class SequenceScorer(object):
                             self.steps % self.args.lambda_network_update_steps == self.args.lambda_network_update_steps - 1:
                             # TODO: integrate learnable lambda inference mode
                             kwargs['lambda_network'].update_model(probs)
-                        else:
-                            probs = probs.detach()
+                        probs = probs.detach()
 
             if avg_probs is None:
                 avg_probs = probs

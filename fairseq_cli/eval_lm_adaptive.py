@@ -174,13 +174,17 @@ class LambdaNetwork(torch.nn.Module):
         self.optimize_beta = optimize_beta
 
     def forward(self, contextual_rep: torch.Tensor, lm_log_probs: torch.Tensor,
-                knn_dist: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
-        # TODO: Validate that all shapes correctly match
-        contextual_rep = contextual_rep[mask] # .reshape(-1, contextual_rep.shape[2])  # (B x T') x D'
-        lm_log_probs = lm_log_probs[mask.permute(1, 0)]  # (B x T') x K
-        print("Contextual rep:", contextual_rep.shape)
-        print("LM log probs:", lm_log_probs.shape)
-        print("kNN dist:", knn_dist.shape)
+                knn_dist: torch.Tensor, mask: torch.Tensor, debug: bool = False) -> torch.Tensor:
+        # Mask should be of shape: B x T
+        # Contextual rep should be of shape: B x T x D (permuted from T x B x D)
+        # LM log probs should be of shape: B x T x V
+        # kNN dist should of shape: B x T x 10
+        if debug:
+            print(f"[DEBUG] Before reshaping / Contextual rep: {contextual_rep.shape} / LM log probs: {lm_log_probs.shape} / kNN dist: {knn_dist.shape} / mask: {mask.shape}")
+        contextual_rep = contextual_rep[mask]
+        lm_log_probs = lm_log_probs[mask]  # (B x T') x K
+        if debug:
+            print(f"[DEBUG] After reshaping / Contextual rep: {contextual_rep.shape} / LM log probs: {lm_log_probs.shape} / kNN dist: {knn_dist.shape} / mask: {mask.shape}")
         assert len(contextual_rep.shape) == 2, contextual_rep.shape  # (B x T) x D'
         assert contextual_rep.shape[1] == self.model_dim
         assert len(lm_log_probs.shape) == 2, lm_log_probs.shape      # (B x T) x K
