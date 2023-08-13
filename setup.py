@@ -79,16 +79,19 @@ try:
         )
     ])
 
-    if 'CUDA_HOME' in os.environ:
-        extensions.extend([
-            cpp_extension.CppExtension(
-                'fairseq.libnat_cuda',
-                sources=[
-                    'fairseq/clib/libnat_cuda/edit_dist.cu',
-                    'fairseq/clib/libnat_cuda/binding.cpp'
-                ],
-            )])
-    cmdclass['build_ext'] = cpp_extension.BuildExtension
+    # Commenting out this package allows fairseq to be built with PyTorch > 2.
+    # This package is not useful for kNN-LM anyway
+
+    # if 'CUDA_HOME' in os.environ:
+    #     extensions.extend([
+    #         cpp_extension.CppExtension(
+    #             'fairseq.libnat_cuda',
+    #             sources=[
+    #                 'fairseq/clib/libnat_cuda/edit_dist.cu',
+    #                 'fairseq/clib/libnat_cuda/binding.cpp'
+    #             ],
+    #         )])
+    # cmdclass['build_ext'] = cpp_extension.BuildExtension
 
 except ImportError:
     pass

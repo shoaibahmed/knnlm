@@ -501,8 +501,18 @@ def add_eval_lm_args(parser):
                        help='dynamically decide which items to store in the non-parametric memory')
     group.add_argument('--use-adaptive-lmbda', action='store_true',
                        help='dynamically tune lambda for deciding the weight to put on the probs from the non-parametric memory')
+    group.add_argument('--rbf-beta', default=1.0, type=float,
+                       help='beta value that is multiplied with the distance in the RBF formulation (defaults to 1)')
     group.add_argument('--use-max-weight-lmbda', action='store_true',
                        help='use max weight for dynamically tuning lambda value (uses mean otherwise)')
+    group.add_argument('--use-learnable-lmbda', action='store_true',
+                       help='train a network to output lambda value (mostly using selective memorization paper)')
+    group.add_argument('--optimize-beta', action='store_true',
+                       help='optimize beta instead of lambda for the network which multiplies the negative distances in RBF')
+    group.add_argument('--lambda-network-update-steps', default=1, type=int,
+                       help='update the learnable network once in the defined number of steps (defaults to 1)')
+    group.add_argument('--lambda-network-warmup-steps', default=0, type=int,
+                       help='start updating the learnable network only defined number of steps (defaults to 0)')
     group.add_argument('--use-faiss-index', action='store_true',
                        help='use FAISS index for search (uses direct PyTorch functions otherwise)')
     group.add_argument('--shuffle-dataset', action='store_true',

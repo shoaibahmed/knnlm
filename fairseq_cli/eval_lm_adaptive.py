@@ -142,6 +142,84 @@ class InMemoryDataStore:
         print(f"Datastore stats / Keys: {self.k.shape} / Values: {self.v.shape} / Distance metric: {self.dist_metric}")
 
 
+class LambdaNetwork(torch.nn.Module):
+    def __init__(self, optimize_beta: bool, n_layers: int = 4, model_dim: int = 1024, hidden_dim: int = 128,
+                 projection_size: int = 128, non_lin: torch.nn.Module = torch.nn.ReLU) -> None:
+        """
+        optimize beta assumes that the output is real valued scalar
+        Feature list:
+            1. contextualized context representation (x)
+            2. Confidence of LM i.e., max_y p(y | x; w)
+            3. Entropy of LM i.e., - sum_i p(y_i | x; w) log p(y_i | x; w)
+            4. L2 distance between the query and the top-10 nearest neighbors
+        """
+        super().__init__()
+        self.model_dim = model_dim
+
+        n_features = 4
+        input_dim = n_features * projection_size
+        layer_list = []
+        for i in range(n_layers-1):
+            layer_list += [torch.nn.Linear(input_dim if i == 0 else hidden_dim, hidden_dim), non_lin()]
+        layer_list += [torch.nn.Linear(hidden_dim, 1)]  # output dim is 1
+        self.model = torch.nn.Sequential(*layer_list)
+
+        self.projection_networks = torch.nn.ModuleDict()
+        self.projection_networks["contextual_rep"] = torch.nn.Linear(model_dim, hidden_dim)
+        self.projection_networks["lm_confidence"] = torch.nn.Linear(1, hidden_dim)
+        self.projection_networks["lm_entropy"] = torch.nn.Linear(1, hidden_dim)
+        self.projection_networks["l2_distance_qk"] = torch.nn.Linear(10, hidden_dim)
+
+        self.optimizer = torch.optim.Adam(self.parameters(), lr=3e-4, weight_decay=1e-4)
+        self.optimize_beta = optimize_beta
+
+    def forward(self, contextual_rep: torch.Tensor, lm_log_probs: torch.Tensor,
+                knn_dist: torch.Tensor, mask: torch.Tensor, debug: bool = False) -> torch.Tensor:
+        # Mask should be of shape: B x T
+        # Contextual rep should be of shape: B x T x D (permuted from T x B x D)
+        # LM log probs should be of shape: B x T x V
+        # kNN dist should of shape: B x T x 10
+        if debug:
+            print(f"[DEBUG] Before reshaping / Contextual rep: {contextual_rep.shape} / LM log probs: {lm_log_probs.shape} / kNN dist: {knn_dist.shape} / mask: {mask.shape}")
+        contextual_rep = contextual_rep[mask]
+        lm_log_probs = lm_log_probs[mask]  # (B x T') x K
+        if debug:
+            print(f"[DEBUG] After reshaping / Contextual rep: {contextual_rep.shape} / LM log probs: {lm_log_probs.shape} / kNN dist: {knn_dist.shape} / mask: {mask.shape}")
+        assert len(contextual_rep.shape) == 2, contextual_rep.shape  # (B x T) x D'
+        assert contextual_rep.shape[1] == self.model_dim
+        assert len(lm_log_probs.shape) == 2, lm_log_probs.shape      # (B x T) x K
+        assert len(knn_dist.shape) == 2, knn_dist.shape              # (B x T) x 10
+        assert knn_dist.shape[1] == 10, knn_dist.shape
+
+        lm_probs = torch.exp(lm_log_probs)
+        max_conf = torch.max(lm_probs, dim=1).values.unsqueeze(1)    # (B x T) x 1
+        entropy = (lm_probs * lm_log_probs).sum(dim=1).unsqueeze(1)  # (B x T) x 1
+
+        # Compute the embeddings
+        contextual_rep_embed = self.projection_networks["contextual_rep"](contextual_rep)
+        lm_confidence_embed = self.projection_networks["lm_confidence"](max_conf)
+        lm_entropy_embed = self.projection_networks["lm_confidence"](entropy)
+        knn_dist_embed = self.projection_networks["l2_distance_qk"](knn_dist)
+
+        # Concatenate the embeddings for the final model
+        concat_embed = torch.cat([contextual_rep_embed, lm_confidence_embed, lm_entropy_embed, knn_dist_embed], dim=1)
+        logit = self.model(concat_embed)
+
+        if self.optimize_beta:
+            return 1 + logit  # 1 is a constant bias
+        else:
+            return torch.sigmoid(logit).squeeze(1)  # apply sigmoid to the output
+
+    def update_model(self, combined_target_log_probs, clip_grad=None):
+        self.optimizer.zero_grad()
+        loss = (-combined_target_log_probs).mean()  # negative log-likelihood
+        loss.backward()
+        if clip_grad is not None:
+            torch.nn.utils.clip_grad_norm_(self.parameters(), clip_grad)
+        self.optimizer.step()
+        print(f"!! Model loss: {float(loss)}")
+
+
 def main_adaptive(parsed_args):
     assert parsed_args.path is not None, '--path required for evaluation!'
 
@@ -239,6 +317,12 @@ def main_adaptive(parsed_args):
     if args.existing_datastore_path is not None:
         knn_dstore.load_datastore(args.existing_datastore_path, args.freeze_loaded_memories)
 
+    lambda_network = None
+    if args.use_learnable_lmbda:
+        print("!! Using learnable lambda...")
+        device = torch.device("cuda" if torch.cuda.is_available else "cpu")
+        lambda_network = LambdaNetwork(args.optimize_beta).to(device)  # instantiate with default params from selective memorization paper
+
     with progress_bar.build_progress_bar(args, itr) as t:
         wps_meter = TimeMeter()
         for ex_i, sample in enumerate(t):
@@ -248,9 +332,9 @@ def main_adaptive(parsed_args):
             sample = utils.move_to_cuda(sample) if use_cuda else sample
 
             gen_timer.start()
-            hypos = scorer.generate(models, sample, knn_dstore=knn_dstore)
+            hypos = scorer.generate(models, sample, knn_dstore=knn_dstore, lambda_network=lambda_network)
             full_pos_scores = torch.cat([x[0]['positional_scores'] for x in hypos], dim=0)  # flattened
-            knn_dstore.update_memory_strengths(full_pos_scores)  # update the strength of the kNN memories
+            knn_dstore.update_memory_strengths(full_pos_scores, scorer.last_lambda_vals)  # update the strength of the kNN memories (last lambda val is None for fixed lambda)
             gen_timer.stop(sample['ntokens'])
 
             key_dtype = np.float16 if args.dstore_fp16 else np.float32
