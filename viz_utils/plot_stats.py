@@ -97,14 +97,14 @@ axs[4].plot([x[0] for x in nn_distance], label='min')
 axs[4].plot([x[1] for x in nn_distance], label='mean')
 axs[4].plot([x[2] for x in nn_distance], label='max')
 axs[4].legend(loc='upper left')
-axs[4].set_ylabel('nearest neighbor distance', fontsize=fontsize)
+axs[4].set_ylabel('Nearest neighbor distance', fontsize=fontsize)
 
 # nn memory life
 axs[5].plot([x[0] for x in nn_memory_life], label='min')
 axs[5].plot([x[1] for x in nn_memory_life], label='mean')
 axs[5].plot([x[2] for x in nn_memory_life], label='max')
 axs[5].legend(loc='upper left')
-axs[5].set_ylabel('nearest neighbor memory life', fontsize=fontsize)
+axs[5].set_ylabel('Nearest neighbor memory life', fontsize=fontsize)
 
 # xlabel for the last subplot
 axs[-1].set_xlabel('Step', fontsize=fontsize)
